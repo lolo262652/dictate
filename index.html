@@ -11,6 +11,14 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+      if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      } else {
+        console.error("PDF.js library not loaded.");
+      }
+    </script>
     <script type="importmap">
       {
         "imports": {
@@ -75,6 +83,11 @@
             </button>
             <input type="file" id="audioFileUpload" accept="audio/*" style="display: none;" />
 
+            <button class="action-button" id="uploadPdfButton" title="Téléverser un PDF">
+                <i class="fas fa-file-pdf"></i>
+            </button>
+            <input type="file" id="pdfFileUpload" accept="application/pdf" style="display: none;" />
+
 
             <button id="recordButton" class="record-button" title="Start/Stop Recording">
               <div class="record-button-inner">
@@ -88,6 +101,10 @@
               <span class="record-text">Record</span>
             </button>
 
+            <button class="action-button" id="copyRawTranscriptionButton" title="Copier la transcription brute">
+                <i class="fas fa-clipboard-list"></i>
+            </button>
+
             <button class="action-button" id="copySummaryButton" title="Copier le résumé">
                 <i class="fas fa-copy"></i>
             </button>
@@ -96,8 +113,12 @@
                 <i class="fas fa-download"></i>
             </button>
 
+            <button class="action-button" id="saveAudioButton" title="Enregistrer le fichier audio">
+                <i class="fas fa-file-audio"></i>
+            </button>
+
             <div class="duration-control-group">
-                <input type="number" id="durationInput" min="1" max="120" value="20" title="Durée d'enregistrement (minutes)" aria-label="Durée d'enregistrement en minutes" />
+                <input type="number" id="durationInput" min="1" max="120" value="30" title="Durée d'enregistrement (minutes)" aria-label="Durée d'enregistrement en minutes" />
                 <button class="action-button" id="setDurationButton" title="Définir la durée d'enregistrement (minutes)">
                     <i class="fas fa-hourglass-half"></i>
                 </button>
