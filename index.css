@@ -158,6 +158,39 @@ body.light-mode {
   }
 }
 
+.app-logo-container {
+  margin-bottom: 32px;
+}
+
+.app-logo {
+  font-size: 36px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-alt) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 8px;
+  letter-spacing: -0.02em;
+  animation: logoGlow 2s ease-in-out infinite alternate;
+}
+
+.app-logo-subtitle {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+@keyframes logoGlow {
+  from {
+    filter: drop-shadow(0 0 10px rgba(130, 170, 255, 0.3));
+  }
+  to {
+    filter: drop-shadow(0 0 20px rgba(130, 170, 255, 0.6));
+  }
+}
+
 .password-modal-header h2 {
   color: var(--color-text);
   font-size: 24px;
@@ -240,6 +273,53 @@ body.light-mode {
   margin-top: 8px;
 }
 
+/* App Entrance Animation */
+.app-container {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+}
+
+.app-container.app-entrance {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* App Branding in Header */
+.app-brand {
+  margin-bottom: 16px;
+}
+
+.app-title {
+  font-size: 28px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-alt) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 4px;
+  letter-spacing: -0.02em;
+  animation: titlePulse 3s ease-in-out infinite;
+}
+
+.app-tagline {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+@keyframes titlePulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px rgba(130, 170, 255, 0.2));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(130, 170, 255, 0.4));
+  }
+}
+
 [contenteditable] {
   caret-color: var(--color-cursor);
 }
@@ -316,11 +396,18 @@ body {
 .note-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   padding: 0 40px 16px;
   border-bottom: 1px solid var(--color-border);
   margin-bottom: 12px;
   transition: border-color var(--transition-normal);
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  margin-right: 24px;
 }
 
 .editor-title {
@@ -330,8 +417,6 @@ body {
   border: none;
   padding: 0;
   margin: 0;
-  flex-grow: 1;
-  margin-right: 24px;
   color: var(--color-text);
   font-family: var(--font-primary);
   background-color: transparent;
@@ -347,6 +432,7 @@ body {
   display: inline-flex;
   box-shadow: var(--shadow-sm);
   transition: background-color var(--transition-normal), border-color var(--transition-normal);
+  flex-shrink: 0;
 }
 
 .tab-navigation {
@@ -754,12 +840,48 @@ body.light-mode .record-button.recording .record-button-inner { color: white; }
     font-size: 15px;
   }
 
+  .app-logo {
+    font-size: 28px;
+  }
+
+  .app-title {
+    font-size: 24px;
+  }
+
   .note-area { padding: 20px 0 0; }
-  .note-header { padding: 0 20px 12px; flex-direction: column; align-items: stretch; gap: 12px; }
-  .editor-title { padding: 0; font-size: 20px; margin-bottom: 0; margin-right: 0; text-align: left; }
-  .tab-navigation-container { width: 100%; }
-  .tab-navigation { width: 100%; }
-  .tab-button { flex-grow: 1; text-align: center; }
+  .note-header { 
+    padding: 0 20px 12px; 
+    flex-direction: column; 
+    align-items: stretch; 
+    gap: 12px; 
+  }
+  
+  .header-left {
+    margin-right: 0;
+    margin-bottom: 12px;
+  }
+  
+  .editor-title { 
+    padding: 0; 
+    font-size: 20px; 
+    margin-bottom: 0; 
+    text-align: left; 
+  }
+  
+  .tab-navigation-container { 
+    width: 100%; 
+    align-self: stretch;
+  }
+  
+  .tab-navigation { 
+    width: 100%; 
+  }
+  
+  .tab-button { 
+    flex-grow: 1; 
+    text-align: center; 
+  }
+  
   .note-content-wrapper { padding: 0 20px 20px; }
   .recording-interface.is-live { padding-left: 15px; padding-right: 15px; } /* Keep existing responsive padding */
   #liveWaveformCanvas { max-width: calc(100% - 30px); height: 60px; }
@@ -783,4 +905,12 @@ body.light-mode .record-button.recording .record-button-inner { color: white; }
     #durationInput { width: 45px; height: 40px; font-size: 13px; }
     .record-button { width: 60px; height: 60px; }
     .live-recording-timer { font-size: 22px; }
+    
+    .app-logo {
+      font-size: 24px;
+    }
+    
+    .app-title {
+      font-size: 20px;
+    }
 }

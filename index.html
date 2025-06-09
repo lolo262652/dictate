@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dictation App</title>
+    <title>DICTATEAI - Dictation App</title>
     <link rel="stylesheet" href="index.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -33,6 +33,10 @@
     <div id="passwordModal" class="password-modal">
       <div class="password-modal-content">
         <div class="password-modal-header">
+          <div class="app-logo-container">
+            <h1 class="app-logo">DICTATEAI</h1>
+            <div class="app-logo-subtitle">Intelligence Artificielle de Dictée</div>
+          </div>
           <h2>Accès Sécurisé</h2>
           <p>Veuillez entrer le mot de passe pour accéder à l'application</p>
         </div>
@@ -58,8 +62,14 @@
       <div class="main-content">
         <div class="note-area">
           <div class="note-header">
-            <div class="editor-title" contenteditable="true" placeholder="Untitled Note">
-              Untitled Note
+            <div class="header-left">
+              <div class="app-brand">
+                <h1 class="app-title">DICTATEAI</h1>
+                <div class="app-tagline">Powered by AI</div>
+              </div>
+              <div class="editor-title" contenteditable="true" placeholder="Untitled Note">
+                Untitled Note
+              </div>
             </div>
             <div class="tab-navigation-container">
               <div class="tab-navigation">
@@ -175,10 +185,15 @@
         if (isAuthenticated) {
           passwordModal.style.display = 'none';
           mainApp.style.display = 'flex';
+          // Trigger entrance animation
+          setTimeout(() => {
+            mainApp.classList.add('app-entrance');
+          }, 100);
           return true;
         } else {
           passwordModal.style.display = 'flex';
           mainApp.style.display = 'none';
+          mainApp.classList.remove('app-entrance');
           return false;
         }
       }
