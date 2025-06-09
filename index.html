@@ -29,7 +29,32 @@
     </script>
   </head>
   <body>
-    <div class="app-container">
+    <!-- Password Protection Modal -->
+    <div id="passwordModal" class="password-modal">
+      <div class="password-modal-content">
+        <div class="password-modal-header">
+          <h2>Accès Sécurisé</h2>
+          <p>Veuillez entrer le mot de passe pour accéder à l'application</p>
+        </div>
+        <div class="password-modal-body">
+          <input 
+            type="password" 
+            id="passwordInput" 
+            placeholder="Mot de passe"
+            autocomplete="current-password"
+          />
+          <button id="passwordSubmit" class="password-submit-btn">
+            <i class="fas fa-unlock"></i>
+            Accéder
+          </button>
+          <div id="passwordError" class="password-error" style="display: none;">
+            Mot de passe incorrect. Veuillez réessayer.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="app-container" id="mainApp" style="display: none;">
       <div class="main-content">
         <div class="note-area">
           <div class="note-header">
@@ -88,7 +113,6 @@
             </button>
             <input type="file" id="pdfFileUpload" accept="application/pdf" style="display: none;" />
 
-
             <button id="recordButton" class="record-button" title="Start/Stop Recording">
               <div class="record-button-inner">
                 <i class="fas fa-microphone"></i>
@@ -127,6 +151,10 @@
             <button class="action-button" id="newButton" title="New Note / Clear">
               <i class="fas fa-file"></i>
             </button>
+
+            <button class="action-button" id="logoutButton" title="Se déconnecter">
+              <i class="fas fa-sign-out-alt"></i>
+            </button>
           </div>
         </div>
       </div>
@@ -135,64 +163,141 @@
     <div id="micStatus" class="debug-panel"></div>
 
     <script>
-      document.addEventListener("DOMContentLoaded", () => {
-        const tabNav = document.querySelector(".tab-navigation");
-        const tabButtons = tabNav.querySelectorAll(".tab-button");
-        const activeTabIndicator = tabNav.querySelector(".active-tab-indicator");
-        const noteContents = document.querySelectorAll(".note-content");
+      // Password protection system
+      const CORRECT_PASSWORD = 'Mai210568';
+      const PASSWORD_SESSION_KEY = 'dictation_app_authenticated';
 
-        function setActiveTab(activeButton, skipAnimation = false) {
-          if (!activeButton || !activeTabIndicator) return;
+      function checkAuthentication() {
+        const isAuthenticated = sessionStorage.getItem(PASSWORD_SESSION_KEY) === 'true';
+        const passwordModal = document.getElementById('passwordModal');
+        const mainApp = document.getElementById('mainApp');
+        
+        if (isAuthenticated) {
+          passwordModal.style.display = 'none';
+          mainApp.style.display = 'flex';
+          return true;
+        } else {
+          passwordModal.style.display = 'flex';
+          mainApp.style.display = 'none';
+          return false;
+        }
+      }
 
-          tabButtons.forEach((btn) => btn.classList.remove("active"));
-          activeButton.classList.add("active");
+      function authenticate(password) {
+        if (password === CORRECT_PASSWORD) {
+          sessionStorage.setItem(PASSWORD_SESSION_KEY, 'true');
+          checkAuthentication();
+          return true;
+        }
+        return false;
+      }
 
-          const tabName = activeButton.getAttribute("data-tab");
-          noteContents.forEach((content) => content.classList.remove("active"));
+      function logout() {
+        sessionStorage.removeItem(PASSWORD_SESSION_KEY);
+        checkAuthentication();
+        // Clear any sensitive data
+        document.getElementById('rawTranscription').innerHTML = '';
+        document.getElementById('polishedNote').innerHTML = '';
+        document.querySelector('.editor-title').textContent = 'Untitled Note';
+      }
 
-          if (tabName === "raw") {
-            document.getElementById("rawTranscription").classList.add("active");
+      // Initialize password protection
+      document.addEventListener('DOMContentLoaded', () => {
+        checkAuthentication();
+
+        // Password form handling
+        const passwordInput = document.getElementById('passwordInput');
+        const passwordSubmit = document.getElementById('passwordSubmit');
+        const passwordError = document.getElementById('passwordError');
+        const logoutButton = document.getElementById('logoutButton');
+
+        function handlePasswordSubmit() {
+          const password = passwordInput.value;
+          if (authenticate(password)) {
+            passwordError.style.display = 'none';
+            passwordInput.value = '';
           } else {
-            document.getElementById("polishedNote").classList.add("active");
-          }
-
-          const originalTransition = activeTabIndicator.style.transition;
-          if (skipAnimation) {
-            activeTabIndicator.style.transition = "none";
-          } else {
-            activeTabIndicator.style.transition = "";
-          }
-
-          activeTabIndicator.style.left = `${activeButton.offsetLeft}px`;
-          activeTabIndicator.style.width = `${activeButton.offsetWidth}px`;
-
-          if (skipAnimation) {
-            activeTabIndicator.offsetHeight;
-            activeTabIndicator.style.transition = originalTransition;
+            passwordError.style.display = 'block';
+            passwordInput.value = '';
+            passwordInput.focus();
           }
         }
 
-        tabButtons.forEach((button) => {
-          button.addEventListener("click", (e) => {
-            setActiveTab(e.currentTarget);
-          });
+        passwordSubmit.addEventListener('click', handlePasswordSubmit);
+        
+        passwordInput.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            handlePasswordSubmit();
+          }
         });
 
-        const initiallyActiveButton = tabNav.querySelector(".tab-button.active");
-        if (initiallyActiveButton) {
-          requestAnimationFrame(() => {
-            setActiveTab(initiallyActiveButton, true);
-          });
+        logoutButton.addEventListener('click', logout);
+
+        // Focus password input when modal is shown
+        if (document.getElementById('passwordModal').style.display !== 'none') {
+          passwordInput.focus();
         }
 
-        window.addEventListener("resize", () => {
-          requestAnimationFrame(() => {
-            const currentActiveButton = tabNav.querySelector(".tab-button.active");
-            if (currentActiveButton) {
-              setActiveTab(currentActiveButton, true);
+        // Tab navigation code (only runs if authenticated)
+        if (checkAuthentication()) {
+          const tabNav = document.querySelector(".tab-navigation");
+          const tabButtons = tabNav.querySelectorAll(".tab-button");
+          const activeTabIndicator = tabNav.querySelector(".active-tab-indicator");
+          const noteContents = document.querySelectorAll(".note-content");
+
+          function setActiveTab(activeButton, skipAnimation = false) {
+            if (!activeButton || !activeTabIndicator) return;
+
+            tabButtons.forEach((btn) => btn.classList.remove("active"));
+            activeButton.classList.add("active");
+
+            const tabName = activeButton.getAttribute("data-tab");
+            noteContents.forEach((content) => content.classList.remove("active"));
+
+            if (tabName === "raw") {
+              document.getElementById("rawTranscription").classList.add("active");
+            } else {
+              document.getElementById("polishedNote").classList.add("active");
             }
+
+            const originalTransition = activeTabIndicator.style.transition;
+            if (skipAnimation) {
+              activeTabIndicator.style.transition = "none";
+            } else {
+              activeTabIndicator.style.transition = "";
+            }
+
+            activeTabIndicator.style.left = `${activeButton.offsetLeft}px`;
+            activeTabIndicator.style.width = `${activeButton.offsetWidth}px`;
+
+            if (skipAnimation) {
+              activeTabIndicator.offsetHeight;
+              activeTabIndicator.style.transition = originalTransition;
+            }
+          }
+
+          tabButtons.forEach((button) => {
+            button.addEventListener("click", (e) => {
+              setActiveTab(e.currentTarget);
+            });
           });
-        });
+
+          const initiallyActiveButton = tabNav.querySelector(".tab-button.active");
+          if (initiallyActiveButton) {
+            requestAnimationFrame(() => {
+              setActiveTab(initiallyActiveButton, true);
+            });
+          }
+
+          window.addEventListener("resize", () => {
+            requestAnimationFrame(() => {
+              const currentActiveButton = tabNav.querySelector(".tab-button.active");
+              if (currentActiveButton) {
+                setActiveTab(currentActiveButton, true);
+              }
+            });
+          });
+        }
       });
     </script>
   </body>
