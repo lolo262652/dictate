@@ -7,7 +7,7 @@ import type { DictationSession } from './src/lib/supabase';
 import type { User } from '@supabase/supabase-js';
 
 // Import existing functionality
-import GoogleGenerativeAI from '@google/genai';
+import { GoogleGenerativeAI } from '@google/genai';
 import { marked } from 'marked';
 import JSZip from 'jszip';
 
