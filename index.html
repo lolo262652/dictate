@@ -23,7 +23,8 @@
       {
         "imports": {
           "@google/genai": "https://esm.sh/@google/genai@^0.8.0",
-          "marked": "https://esm.sh/marked@^4.0.0"
+          "marked": "https://esm.sh/marked@^4.0.0",
+          "jszip": "https://esm.sh/jszip@3.10.1"
         }
       }
     </script>
@@ -38,8 +39,9 @@
             </div>
             <div class="tab-navigation-container">
               <div class="tab-navigation">
-                <button class="tab-button active" data-tab="note">Polished</button>
-                <button class="tab-button" data-tab="raw">Raw</button>
+                <button class="tab-button active" data-tab="summary">Résumé</button>
+                <button class="tab-button" data-tab="note">Note Détaillée</button>
+                <button class="tab-button" data-tab="raw">Brut</button>
                 <div class="active-tab-indicator"></div>
               </div>
             </div>
@@ -47,15 +49,21 @@
 
           <div class="note-content-wrapper">
             <div
-              id="polishedNote"
+              id="summaryEditor"
               class="note-content active"
-              placeholder="Your polished notes and summary will appear here..."
+              contenteditable="true"
+              placeholder="Le résumé éditable apparaîtra ici..."
+            ></div>
+            <div
+              id="polishedNote"
+              class="note-content"
+              placeholder="La note détaillée (lecture seule) apparaîtra ici..."
             ></div>
             <div
               id="rawTranscription"
               class="note-content"
               contenteditable="true"
-              placeholder="Raw transcription with speaker labels will appear here..."
+              placeholder="La transcription brute éditable apparaîtra ici..."
             ></div>
           </div>
         </div>
@@ -88,7 +96,6 @@
             </button>
             <input type="file" id="pdfFileUpload" accept="application/pdf" style="display: none;" />
 
-
             <button id="recordButton" class="record-button" title="Start/Stop Recording">
               <div class="record-button-inner">
                 <i class="fas fa-microphone"></i>
@@ -100,21 +107,29 @@
               </svg>
               <span class="record-text">Record</span>
             </button>
+            
+            <button class="action-button" id="refreshAllButton" title="Tout actualiser à partir du texte brut">
+                <i class="fas fa-sync-alt"></i>
+            </button>
+
+            <button class="action-button" id="refreshNoteFromSummaryButton" title="Actualiser la note détaillée à partir du résumé modifié">
+                <i class="fas fa-redo"></i>
+            </button>
 
             <button class="action-button" id="copyRawTranscriptionButton" title="Copier la transcription brute">
                 <i class="fas fa-clipboard-list"></i>
             </button>
 
-            <button class="action-button" id="copySummaryButton" title="Copier le résumé">
+            <button class="action-button" id="copySummaryButton" title="Copier le résumé (depuis l'onglet Résumé)">
                 <i class="fas fa-copy"></i>
             </button>
             
-            <button class="action-button" id="saveSummaryButton" title="Enregistrer le résumé">
+            <button class="action-button" id="saveSummaryButton" title="Enregistrer le résumé (depuis l'onglet Résumé)">
                 <i class="fas fa-download"></i>
             </button>
 
-            <button class="action-button" id="saveAudioButton" title="Enregistrer le fichier audio">
-                <i class="fas fa-file-audio"></i>
+            <button class="action-button" id="saveAllButton" title="Sauvegarder tout (audio, transcription, résumé)">
+                <i class="fas fa-archive"></i>
             </button>
 
             <div class="duration-control-group">
@@ -139,7 +154,7 @@
         const tabNav = document.querySelector(".tab-navigation");
         const tabButtons = tabNav.querySelectorAll(".tab-button");
         const activeTabIndicator = tabNav.querySelector(".active-tab-indicator");
-        const noteContents = document.querySelectorAll(".note-content");
+        const noteContents = document.querySelectorAll(".note-content"); // Includes summaryEditor, polishedNote, rawTranscription
 
         function setActiveTab(activeButton, skipAnimation = false) {
           if (!activeButton || !activeTabIndicator) return;
@@ -150,24 +165,26 @@
           const tabName = activeButton.getAttribute("data-tab");
           noteContents.forEach((content) => content.classList.remove("active"));
 
-          if (tabName === "raw") {
-            document.getElementById("rawTranscription").classList.add("active");
-          } else {
-            document.getElementById("polishedNote").classList.add("active");
+          // Show the correct content div based on data-tab attribute
+          const targetContentId = tabName === 'summary' ? 'summaryEditor' : (tabName === 'note' ? 'polishedNote' : 'rawTranscription');
+          const targetContentDiv = document.getElementById(targetContentId);
+          if (targetContentDiv) {
+            targetContentDiv.classList.add("active");
           }
+
 
           const originalTransition = activeTabIndicator.style.transition;
           if (skipAnimation) {
             activeTabIndicator.style.transition = "none";
           } else {
-            activeTabIndicator.style.transition = "";
+            activeTabIndicator.style.transition = ""; // Use CSS defined transition
           }
 
           activeTabIndicator.style.left = `${activeButton.offsetLeft}px`;
           activeTabIndicator.style.width = `${activeButton.offsetWidth}px`;
 
           if (skipAnimation) {
-            activeTabIndicator.offsetHeight;
+            activeTabIndicator.offsetHeight; // Force reflow
             activeTabIndicator.style.transition = originalTransition;
           }
         }
@@ -178,20 +195,22 @@
           });
         });
 
+        // Set initial active tab based on HTML class
         const initiallyActiveButton = tabNav.querySelector(".tab-button.active");
         if (initiallyActiveButton) {
-          requestAnimationFrame(() => {
-            setActiveTab(initiallyActiveButton, true);
+          requestAnimationFrame(() => { // Ensure layout is complete
+             setActiveTab(initiallyActiveButton, true); // true to skip animation on load
           });
         }
-
+        
+        // Ensure tab indicator is correctly positioned on resize
         window.addEventListener("resize", () => {
-          requestAnimationFrame(() => {
-            const currentActiveButton = tabNav.querySelector(".tab-button.active");
-            if (currentActiveButton) {
-              setActiveTab(currentActiveButton, true);
-            }
-          });
+            requestAnimationFrame(() => {
+                const currentActiveButton = tabNav.querySelector(".tab-button.active");
+                if (currentActiveButton) {
+                    setActiveTab(currentActiveButton, true); // true to skip animation
+                }
+            });
         });
       });
     </script>

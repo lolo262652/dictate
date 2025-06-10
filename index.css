@@ -322,13 +322,7 @@ body.light-mode .active-tab-indicator {
 .note-content h1 { font-size: 1.8em; }
 .note-content h2 { font-size: 1.5em; }
 .note-content h3 { font-size: 1.25em; margin-bottom: 0.5em; } /* Adjusted for summary/detail titles */
-
-/* Ensure first summary title or other h3 has no top margin if it's the first meaningful element */
-.note-content > .summary-section-container > .summary-header > h3,
-.note-content > h3:first-of-type {
-  margin-top: 0;
-}
-
+#polishedNote > h3:first-child { margin-top: 0; } /* Ensure first summary title has no top margin */
 
 .note-content p { margin-bottom: 1em; }
 .note-content ul, .note-content ol { margin-bottom: 1em; padding-left: 1.5em; }
@@ -345,66 +339,9 @@ body.light-mode .active-tab-indicator {
 }
 
 /* Styling for sections within polishedNote */
-.summary-section-container { /* Renamed from .summary-section */
-  margin-bottom: 1em;
+.summary-section, .detailed-note-section {
+  margin-bottom: 1em; /* Add some space below each section */
 }
-.detailed-note-section {
-  margin-bottom: 1em; 
-}
-
-.summary-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.5em; /* Space between header and content/textarea */
-}
-
-.summary-header h3 {
-  margin-bottom: 0; /* Remove bottom margin from h3 inside header */
-}
-
-.summary-controls .icon-button {
-  background: transparent;
-  border: none;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  padding: 2px 4px;
-  font-size: 15px;
-  transition: color var(--transition-fast);
-  vertical-align: middle;
-  margin-left: 8px;
-}
-.summary-controls .icon-button:hover {
-  color: var(--color-text);
-}
-.summary-controls .icon-button:first-child {
-  margin-left: 0;
-}
-
-
-.summary-edit-textarea {
-  width: 100%;
-  min-height: 150px;
-  padding: 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background-color: var(--color-surface);
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: 0.95em; /* Slightly larger for better readability */
-  line-height: 1.6;
-  resize: vertical;
-  margin-top: 0.5em; /* Consistent spacing */
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.07);
-  transition: border-color var(--transition-fast), background-color var(--transition-fast);
-}
-
-.summary-edit-textarea:focus {
-  outline: none;
-  border-color: var(--color-accent);
-  background-color: var(--color-bg); /* Slight change on focus */
-}
-
 
 
 .recording-interface {
