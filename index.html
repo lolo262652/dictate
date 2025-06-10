@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dictation App</title>
+    <title>DICTATEAI - Dictation App</title>
     <link rel="stylesheet" href="index.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -30,12 +30,47 @@
     </script>
   </head>
   <body>
-    <div class="app-container">
+    <!-- Password Protection Modal -->
+    <div id="passwordModal" class="password-modal">
+      <div class="password-modal-content">
+        <div class="password-modal-header">
+          <div class="app-logo-container">
+            <h1 class="app-logo">DICTATEAI</h1>
+            <div class="app-logo-subtitle">Intelligence Artificielle de Dictée</div>
+          </div>
+          <h2>Accès Sécurisé</h2>
+          <p>Veuillez entrer le mot de passe pour accéder à l'application</p>
+        </div>
+        <div class="password-modal-body">
+          <input 
+            type="password" 
+            id="passwordInput" 
+            placeholder="Mot de passe"
+            autocomplete="current-password"
+          />
+          <button id="passwordSubmit" class="password-submit-btn">
+            <i class="fas fa-unlock"></i>
+            Accéder
+          </button>
+          <div id="passwordError" class="password-error" style="display: none;">
+            Mot de passe incorrect. Veuillez réessayer.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="app-container" id="mainApp" style="display: none;">
       <div class="main-content">
         <div class="note-area">
           <div class="note-header">
-            <div class="editor-title" contenteditable="true" placeholder="Untitled Note">
-              Untitled Note
+            <div class="header-left">
+              <div class="app-brand">
+                <h1 class="app-title">DICTATEAI</h1>
+                <div class="app-tagline">Powered by AI</div>
+              </div>
+              <div class="editor-title" contenteditable="true" placeholder="Untitled Note">
+                Untitled Note
+              </div>
             </div>
             <div class="tab-navigation-container">
               <div class="tab-navigation">
@@ -142,6 +177,10 @@
             <button class="action-button" id="newButton" title="New Note / Clear">
               <i class="fas fa-file"></i>
             </button>
+
+            <button class="action-button" id="logoutButton" title="Se déconnecter">
+              <i class="fas fa-sign-out-alt"></i>
+            </button>
           </div>
         </div>
       </div>
@@ -150,68 +189,156 @@
     <div id="micStatus" class="debug-panel"></div>
 
     <script>
-      document.addEventListener("DOMContentLoaded", () => {
-        const tabNav = document.querySelector(".tab-navigation");
-        const tabButtons = tabNav.querySelectorAll(".tab-button");
-        const activeTabIndicator = tabNav.querySelector(".active-tab-indicator");
-        const noteContents = document.querySelectorAll(".note-content"); // Includes summaryEditor, polishedNote, rawTranscription
+      // Password protection system
+      const CORRECT_PASSWORD = 'Mai210568';
+      const PASSWORD_SESSION_KEY = 'dictation_app_authenticated';
 
-        function setActiveTab(activeButton, skipAnimation = false) {
-          if (!activeButton || !activeTabIndicator) return;
-
-          tabButtons.forEach((btn) => btn.classList.remove("active"));
-          activeButton.classList.add("active");
-
-          const tabName = activeButton.getAttribute("data-tab");
-          noteContents.forEach((content) => content.classList.remove("active"));
-
-          // Show the correct content div based on data-tab attribute
-          const targetContentId = tabName === 'summary' ? 'summaryEditor' : (tabName === 'note' ? 'polishedNote' : 'rawTranscription');
-          const targetContentDiv = document.getElementById(targetContentId);
-          if (targetContentDiv) {
-            targetContentDiv.classList.add("active");
-          }
-
-
-          const originalTransition = activeTabIndicator.style.transition;
-          if (skipAnimation) {
-            activeTabIndicator.style.transition = "none";
-          } else {
-            activeTabIndicator.style.transition = ""; // Use CSS defined transition
-          }
-
-          activeTabIndicator.style.left = `${activeButton.offsetLeft}px`;
-          activeTabIndicator.style.width = `${activeButton.offsetWidth}px`;
-
-          if (skipAnimation) {
-            activeTabIndicator.offsetHeight; // Force reflow
-            activeTabIndicator.style.transition = originalTransition;
-          }
-        }
-
-        tabButtons.forEach((button) => {
-          button.addEventListener("click", (e) => {
-            setActiveTab(e.currentTarget);
-          });
-        });
-
-        // Set initial active tab based on HTML class
-        const initiallyActiveButton = tabNav.querySelector(".tab-button.active");
-        if (initiallyActiveButton) {
-          requestAnimationFrame(() => { // Ensure layout is complete
-             setActiveTab(initiallyActiveButton, true); // true to skip animation on load
-          });
-        }
+      function checkAuthentication() {
+        const isAuthenticated = sessionStorage.getItem(PASSWORD_SESSION_KEY) === 'true';
+        const passwordModal = document.getElementById('passwordModal');
+        const mainApp = document.getElementById('mainApp');
         
-        // Ensure tab indicator is correctly positioned on resize
-        window.addEventListener("resize", () => {
-            requestAnimationFrame(() => {
-                const currentActiveButton = tabNav.querySelector(".tab-button.active");
-                if (currentActiveButton) {
-                    setActiveTab(currentActiveButton, true); // true to skip animation
-                }
-            });
+        if (isAuthenticated) {
+          passwordModal.style.display = 'none';
+          mainApp.style.display = 'flex';
+          // Trigger entrance animation
+          setTimeout(() => {
+            mainApp.classList.add('app-entrance');
+          }, 100);
+          return true;
+        } else {
+          passwordModal.style.display = 'flex';
+          mainApp.style.display = 'none';
+          mainApp.classList.remove('app-entrance');
+          return false;
+        }
+      }
+
+      function authenticate(password) {
+        if (password === CORRECT_PASSWORD) {
+          sessionStorage.setItem(PASSWORD_SESSION_KEY, 'true');
+          checkAuthentication();
+          return true;
+        }
+        return false;
+      }
+
+      function logout() {
+        sessionStorage.removeItem(PASSWORD_SESSION_KEY);
+        checkAuthentication();
+        // Clear any sensitive data
+        document.getElementById('rawTranscription').innerHTML = '';
+        document.getElementById('polishedNote').innerHTML = '';
+        document.querySelector('.editor-title').textContent = 'Untitled Note';
+      }
+
+      // Initialize password protection
+      document.addEventListener('DOMContentLoaded', () => {
+        checkAuthentication();
+
+        // Password form handling
+        const passwordInput = document.getElementById('passwordInput');
+        const passwordSubmit = document.getElementById('passwordSubmit');
+        const passwordError = document.getElementById('passwordError');
+        const logoutButton = document.getElementById('logoutButton');
+
+        function handlePasswordSubmit() {
+          const password = passwordInput.value;
+          if (authenticate(password)) {
+            passwordError.style.display = 'none';
+            passwordInput.value = '';
+          } else {
+            passwordError.style.display = 'block';
+            passwordInput.value = '';
+            passwordInput.focus();
+          }
+        }
+
+        passwordSubmit.addEventListener('click', handlePasswordSubmit);
+        
+        passwordInput.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            handlePasswordSubmit();
+          }
         });
+
+        logoutButton.addEventListener('click', logout);
+
+        // Focus password input when modal is shown
+        if (document.getElementById('passwordModal').style.display !== 'none') {
+          passwordInput.focus();
+        }
+
+        // Tab navigation code (only runs if authenticated)
+        if (checkAuthentication()) {
+          const tabNav = document.querySelector(".tab-navigation");
+          const tabButtons = tabNav.querySelectorAll(".tab-button");
+          const activeTabIndicator = tabNav.querySelector(".active-tab-indicator");
+          const noteContents = document.querySelectorAll(".note-content");
+
+          function setActiveTab(activeButton, skipAnimation = false) {
+            if (!activeButton || !activeTabIndicator) return;
+
+            tabButtons.forEach((btn) => btn.classList.remove("active"));
+            activeButton.classList.add("active");
+
+            const tabName = activeButton.getAttribute("data-tab");
+            noteContents.forEach((content) => content.classList.remove("active"));
+
+            let targetContentId;
+            if (tabName === "summary") {
+              targetContentId = "summaryEditor";
+            } else if (tabName === "note") {
+              targetContentId = "polishedNote";
+            } else if (tabName === "raw") {
+              targetContentId = "rawTranscription";
+            }
+
+            if (targetContentId) {
+              const targetContentDiv = document.getElementById(targetContentId);
+              if (targetContentDiv) {
+                targetContentDiv.classList.add("active");
+              }
+            }
+
+            const originalTransition = activeTabIndicator.style.transition;
+            if (skipAnimation) {
+              activeTabIndicator.style.transition = "none";
+            } else {
+              activeTabIndicator.style.transition = "";
+            }
+
+            activeTabIndicator.style.left = `${activeButton.offsetLeft}px`;
+            activeTabIndicator.style.width = `${activeButton.offsetWidth}px`;
+
+            if (skipAnimation) {
+              activeTabIndicator.offsetHeight;
+              activeTabIndicator.style.transition = originalTransition;
+            }
+          }
+
+          tabButtons.forEach((button) => {
+            button.addEventListener("click", (e) => {
+              setActiveTab(e.currentTarget);
+            });
+          });
+
+          const initiallyActiveButton = tabNav.querySelector(".tab-button.active");
+          if (initiallyActiveButton) {
+            requestAnimationFrame(() => {
+              setActiveTab(initiallyActiveButton, true);
+            });
+          }
+
+          window.addEventListener("resize", () => {
+            requestAnimationFrame(() => {
+              const currentActiveButton = tabNav.querySelector(".tab-button.active");
+              if (currentActiveButton) {
+                setActiveTab(currentActiveButton, true);
+              }
+            });
+          });
+        }
       });
     </script>
   </body>
