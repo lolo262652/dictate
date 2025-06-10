@@ -1,1340 +1,830 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
-*/
-/* tslint:disable */
+import { AuthService } from './src/lib/auth';
+import { DatabaseService } from './src/lib/database';
+import { StorageService } from './src/lib/storage';
+import { AuthModal } from './src/components/AuthModal';
+import { SessionsList } from './src/components/SessionsList';
+import type { DictationSession } from './src/lib/supabase';
+import type { User } from '@supabase/supabase-js';
 
-import {GoogleGenAI, GenerateContentResponse} from '@google/genai';
-import {marked} from 'marked';
+// Import existing functionality
+import { GoogleGenerativeAI } from '@google/genai';
+import { marked } from 'marked';
 import JSZip from 'jszip';
 
-// Déclaration pour pdf.js si le typage global n'est pas disponible
-declare var pdfjsLib: any;
-
-const MODEL_NAME = 'gemini-2.5-flash-preview-04-17';
-
-interface Note {
-  id: string;
-  rawTranscription: string;
-  polishedNote: string;
-  summary: string;
-  timestamp: number;
-  sourceType?: 'audio' | 'pdf';
-  audioBlob?: Blob;
-  audioMimeType?: string;
-}
-
-class VoiceNotesApp {
-  private genAI: GoogleGenAI;
-  private mediaRecorder: MediaRecorder | null = null;
-  private recordButton: HTMLButtonElement;
-  private recordingStatus: HTMLDivElement;
-  
-  private summaryEditor: HTMLDivElement; // For editable summary
-  private polishedNote: HTMLDivElement; // For read-only detailed note
-  private rawTranscription: HTMLDivElement; // For editable raw transcription
-
-  private newButton: HTMLButtonElement;
-  private themeToggleButton: HTMLButtonElement;
-  private copySummaryButton: HTMLButtonElement;
-  private saveSummaryButton: HTMLButtonElement;
-  private copyRawTranscriptionButton: HTMLButtonElement;
-  private uploadAudioButton: HTMLButtonElement;
-  private audioFileUploadInput: HTMLInputElement;
-  private uploadPdfButton: HTMLButtonElement;
-  private pdfFileUploadInput: HTMLInputElement;
-  private durationInput: HTMLInputElement;
-  private setDurationButton: HTMLButtonElement;
-  private themeToggleIcon: HTMLElement;
-  private editorTitle: HTMLDivElement;
-
-  private refreshAllButton: HTMLButtonElement;
-  private refreshNoteFromSummaryButton: HTMLButtonElement;
-  private saveAllButton: HTMLButtonElement;
-
-
-  private audioChunks: Blob[] = [];
+class DictationApp {
+  private currentUser: User | null = null;
+  private currentSession: DictationSession | null = null;
+  private authModal: AuthModal;
+  private sessionsList: SessionsList;
   private isRecording = false;
-  private isProcessingFile = false;
-  private currentNote: Note | null = null;
-  private stream: MediaStream | null = null;
-
-  private recordingInterface: HTMLDivElement;
-  private liveRecordingTitle: HTMLDivElement;
-  private liveWaveformCanvas: HTMLCanvasElement | null;
-  private liveWaveformCtx: CanvasRenderingContext2D | null = null;
-  private liveRecordingTimerDisplay: HTMLDivElement;
-  private statusIndicatorDiv: HTMLDivElement | null;
-
+  private mediaRecorder: MediaRecorder | null = null;
+  private audioChunks: Blob[] = [];
+  private recordingStartTime = 0;
+  private recordingDuration = 30 * 60; // 30 minutes default
+  private recordingTimer: number | null = null;
+  private liveWaveformCanvas: HTMLCanvasElement | null = null;
+  private liveWaveformContext: CanvasRenderingContext2D | null = null;
   private audioContext: AudioContext | null = null;
-  private analyserNode: AnalyserNode | null = null;
-  private waveformDataArray: Uint8Array | null = null;
-  private waveformDrawingId: number | null = null;
-  private timerIntervalId: number | null = null;
-  private recordingStartTime: number = 0;
-
-  private userDefinedMaxRecordingMinutes: number = 30;
-  private activeRecordingMaxDurationMs: number | null = null;
-  private activeRecordingOriginalMinutesSetting: number | null = null;
-  private maxDurationTimeoutId: number | null = null;
-
+  private analyser: AnalyserNode | null = null;
+  private animationId: number | null = null;
 
   constructor() {
-    this.genAI = new GoogleGenAI({
-      apiKey: process.env.API_KEY!,
+    this.authModal = new AuthModal();
+    this.sessionsList = new SessionsList(this.loadSession.bind(this));
+    this.initializeApp();
+  }
+
+  private async initializeApp() {
+    // Check authentication state
+    AuthService.onAuthStateChange((user) => {
+      this.currentUser = user;
+      if (user) {
+        this.authModal.hide();
+        this.showMainApp();
+        this.sessionsList.loadSessions();
+      } else {
+        this.authModal.show();
+        this.hideMainApp();
+      }
     });
 
-    if (typeof pdfjsLib !== 'undefined') {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    // Check if user is already authenticated
+    const user = await AuthService.getCurrentUser();
+    if (user) {
+      this.currentUser = user;
+      this.showMainApp();
+      this.sessionsList.loadSessions();
     } else {
-        console.error("pdfjsLib is not defined. PDF processing will not work.");
-        const statusElement = document.getElementById('recordingStatus');
-        if (statusElement) {
-            statusElement.textContent = "Erreur: La bibliothèque PDF n'a pas pu être chargée.";
-        }
+      this.authModal.show();
     }
 
-    this.recordButton = document.getElementById('recordButton') as HTMLButtonElement;
-    this.recordingStatus = document.getElementById('recordingStatus') as HTMLDivElement;
+    this.setupEventListeners();
+    this.setupTabNavigation();
+  }
+
+  private showMainApp() {
+    const mainApp = document.getElementById('mainApp') as HTMLElement;
+    mainApp.style.display = 'flex';
+    document.body.appendChild(this.sessionsList.getElement());
+    setTimeout(() => {
+      mainApp.classList.add('app-entrance');
+    }, 100);
+  }
+
+  private hideMainApp() {
+    const mainApp = document.getElementById('mainApp') as HTMLElement;
+    mainApp.style.display = 'none';
+    mainApp.classList.remove('app-entrance');
+    const sessionsList = this.sessionsList.getElement();
+    if (sessionsList.parentNode) {
+      sessionsList.parentNode.removeChild(sessionsList);
+    }
+  }
+
+  private async loadSession(session: DictationSession) {
+    this.currentSession = session;
     
-    this.summaryEditor = document.getElementById('summaryEditor') as HTMLDivElement;
-    this.polishedNote = document.getElementById('polishedNote') as HTMLDivElement;
-    this.rawTranscription = document.getElementById('rawTranscription') as HTMLDivElement;
+    // Update UI with session data
+    const titleElement = document.querySelector('.editor-title') as HTMLElement;
+    const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+    const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+    const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
 
-    this.newButton = document.getElementById('newButton') as HTMLButtonElement;
-    this.themeToggleButton = document.getElementById('themeToggleButton') as HTMLButtonElement;
-    this.copySummaryButton = document.getElementById('copySummaryButton') as HTMLButtonElement;
-    this.saveSummaryButton = document.getElementById('saveSummaryButton') as HTMLButtonElement;
-    this.saveAllButton = document.getElementById('saveAllButton') as HTMLButtonElement;
-    this.copyRawTranscriptionButton = document.getElementById('copyRawTranscriptionButton') as HTMLButtonElement;
+    titleElement.textContent = session.title;
+    summaryEditor.innerHTML = session.summary || '';
+    polishedNote.innerHTML = session.detailed_note || '';
+    rawTranscription.innerHTML = session.raw_transcription || '';
+
+    // Update placeholders
+    this.updatePlaceholders();
+  }
+
+  private async saveCurrentSession() {
+    if (!this.currentUser || !this.currentSession) return;
+
+    const titleElement = document.querySelector('.editor-title') as HTMLElement;
+    const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+    const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+    const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
+
+    const updates: Partial<DictationSession> = {
+      title: titleElement.textContent || 'Untitled Note',
+      summary: summaryEditor.innerHTML,
+      detailed_note: polishedNote.innerHTML,
+      raw_transcription: rawTranscription.innerHTML
+    };
+
+    const updatedSession = await DatabaseService.updateSession(this.currentSession.id, updates);
+    if (updatedSession) {
+      this.currentSession = updatedSession;
+    }
+  }
+
+  private async createNewSession(): Promise<DictationSession | null> {
+    if (!this.currentUser) return null;
+
+    const session: Partial<DictationSession> = {
+      user_id: this.currentUser.id,
+      title: 'Untitled Note',
+      raw_transcription: '',
+      summary: '',
+      detailed_note: '',
+      recording_duration: 0
+    };
+
+    const newSession = await DatabaseService.createSession(session);
+    if (newSession) {
+      this.currentSession = newSession;
+      this.sessionsList.loadSessions();
+    }
+    return newSession;
+  }
+
+  private setupEventListeners() {
+    // Logout button
+    const logoutButton = document.getElementById('logoutButton') as HTMLButtonElement;
+    logoutButton.addEventListener('click', async () => {
+      await AuthService.signOut();
+    });
+
+    // New button
+    const newButton = document.getElementById('newButton') as HTMLButtonElement;
+    newButton.addEventListener('click', async () => {
+      await this.createNewSession();
+      this.clearAllContent();
+    });
+
+    // Auto-save on content changes
+    const titleElement = document.querySelector('.editor-title') as HTMLElement;
+    const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+    const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+    const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
+
+    [titleElement, summaryEditor, polishedNote, rawTranscription].forEach(element => {
+      element.addEventListener('input', () => {
+        if (this.currentSession) {
+          this.saveCurrentSession();
+        }
+      });
+    });
+
+    // Recording functionality
+    this.setupRecordingControls();
     
-    this.uploadAudioButton = document.getElementById('uploadAudioButton') as HTMLButtonElement;
-    this.audioFileUploadInput = document.getElementById('audioFileUpload') as HTMLInputElement;
-    this.uploadPdfButton = document.getElementById('uploadPdfButton') as HTMLButtonElement;
-    this.pdfFileUploadInput = document.getElementById('pdfFileUpload') as HTMLInputElement;
-    this.durationInput = document.getElementById('durationInput') as HTMLInputElement;
-    this.setDurationButton = document.getElementById('setDurationButton') as HTMLButtonElement;
-    this.themeToggleIcon = this.themeToggleButton.querySelector('i') as HTMLElement;
-    this.editorTitle = document.querySelector('.editor-title') as HTMLDivElement;
+    // Theme toggle
+    this.setupThemeToggle();
+    
+    // File uploads
+    this.setupFileUploads();
+    
+    // Copy and save buttons
+    this.setupCopyAndSaveButtons();
+  }
 
-    this.refreshAllButton = document.getElementById('refreshAllButton') as HTMLButtonElement;
-    this.refreshNoteFromSummaryButton = document.getElementById('refreshNoteFromSummaryButton') as HTMLButtonElement;
+  private setupRecordingControls() {
+    const recordButton = document.getElementById('recordButton') as HTMLButtonElement;
+    const durationInput = document.getElementById('durationInput') as HTMLInputElement;
+    const setDurationButton = document.getElementById('setDurationButton') as HTMLButtonElement;
 
-    this.recordingInterface = document.querySelector('.recording-interface') as HTMLDivElement;
-    this.liveRecordingTitle = document.getElementById('liveRecordingTitle') as HTMLDivElement;
+    recordButton.addEventListener('click', () => {
+      if (this.isRecording) {
+        this.stopRecording();
+      } else {
+        this.startRecording();
+      }
+    });
+
+    setDurationButton.addEventListener('click', () => {
+      const minutes = parseInt(durationInput.value, 10);
+      if (minutes >= 1 && minutes <= 120) {
+        this.recordingDuration = minutes * 60;
+      }
+    });
+  }
+
+  private async startRecording() {
+    if (!this.currentUser) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.mediaRecorder = new MediaRecorder(stream);
+      this.audioChunks = [];
+
+      // Create new session if none exists
+      if (!this.currentSession) {
+        await this.createNewSession();
+      }
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        this.audioChunks.push(event.data);
+      };
+
+      this.mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
+        await this.processRecording(audioBlob);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      this.mediaRecorder.start();
+      this.isRecording = true;
+      this.recordingStartTime = Date.now();
+
+      this.updateRecordingUI();
+      this.startRecordingTimer();
+      this.setupLiveWaveform(stream);
+
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      alert('Erreur lors du démarrage de l\'enregistrement');
+    }
+  }
+
+  private stopRecording() {
+    if (this.mediaRecorder && this.isRecording) {
+      this.mediaRecorder.stop();
+      this.isRecording = false;
+      this.updateRecordingUI();
+      this.stopRecordingTimer();
+      this.stopLiveWaveform();
+    }
+  }
+
+  private async processRecording(audioBlob: Blob) {
+    if (!this.currentUser || !this.currentSession) return;
+
+    try {
+      // Upload audio file
+      const audioPath = await StorageService.uploadAudioFile(
+        new File([audioBlob], `recording-${Date.now()}.wav`, { type: 'audio/wav' }),
+        this.currentUser.id,
+        this.currentSession.id
+      );
+
+      // Convert audio to base64 for transcription
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64Audio = (reader.result as string).split(',')[1];
+        await this.transcribeAudio(base64Audio, audioPath);
+      };
+      reader.readAsDataURL(audioBlob);
+
+    } catch (error) {
+      console.error('Error processing recording:', error);
+      alert('Erreur lors du traitement de l\'enregistrement');
+    }
+  }
+
+  private async transcribeAudio(base64Audio: string, audioPath?: string | null) {
+    if (!this.currentSession) return;
+
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('Clé API Gemini manquante');
+      }
+
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+      const result = await model.generateContent([
+        "Transcris cet audio en français. Retourne uniquement le texte transcrit, sans commentaires additionnels.",
+        {
+          inlineData: {
+            mimeType: "audio/wav",
+            data: base64Audio
+          }
+        }
+      ]);
+
+      const transcription = result.response.text();
+      
+      // Update UI and database
+      const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
+      rawTranscription.innerHTML = transcription;
+
+      // Update session in database
+      const updates: Partial<DictationSession> = {
+        raw_transcription: transcription,
+        recording_duration: Math.floor((Date.now() - this.recordingStartTime) / 1000)
+      };
+
+      if (audioPath) {
+        updates.audio_file_path = audioPath;
+      }
+
+      await DatabaseService.updateSession(this.currentSession.id, updates);
+
+      // Generate summary and detailed note
+      await this.generateSummaryAndNote(transcription);
+
+    } catch (error) {
+      console.error('Error transcribing audio:', error);
+      alert('Erreur lors de la transcription');
+    }
+  }
+
+  private async generateSummaryAndNote(transcription: string) {
+    if (!this.currentSession) return;
+
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) return;
+
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+      // Generate summary
+      const summaryResult = await model.generateContent([
+        `Crée un résumé concis et structuré de ce texte en français. Le résumé doit capturer les points clés et être facilement lisible. Utilise le format Markdown pour la structure.
+
+Texte à résumer:
+${transcription}`
+      ]);
+
+      const summary = summaryResult.response.text();
+      const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+      summaryEditor.innerHTML = marked(summary) as string;
+
+      // Generate detailed note
+      const noteResult = await model.generateContent([
+        `Transforme ce texte en une note détaillée et bien structurée en français. Organise le contenu de manière logique avec des titres, sous-titres et points clés. Utilise le format Markdown pour une présentation claire.
+
+Texte à structurer:
+${transcription}`
+      ]);
+
+      const detailedNote = noteResult.response.text();
+      const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+      polishedNote.innerHTML = marked(detailedNote) as string;
+
+      // Update database
+      await DatabaseService.updateSession(this.currentSession.id, {
+        summary: summaryEditor.innerHTML,
+        detailed_note: polishedNote.innerHTML
+      });
+
+      this.updatePlaceholders();
+
+    } catch (error) {
+      console.error('Error generating summary and note:', error);
+    }
+  }
+
+  private updateRecordingUI() {
+    const recordButton = document.getElementById('recordButton') as HTMLButtonElement;
+    const recordingInterface = document.querySelector('.recording-interface') as HTMLElement;
+    const liveTitle = document.getElementById('liveRecordingTitle') as HTMLElement;
+    const liveCanvas = document.getElementById('liveWaveformCanvas') as HTMLElement;
+    const liveTimer = document.getElementById('liveRecordingTimerDisplay') as HTMLElement;
+
+    if (this.isRecording) {
+      recordButton.classList.add('recording');
+      recordingInterface.classList.add('is-live');
+      liveTitle.style.display = 'block';
+      liveCanvas.style.display = 'block';
+      liveTimer.style.display = 'block';
+      
+      const icon = recordButton.querySelector('i') as HTMLElement;
+      icon.className = 'fas fa-stop';
+    } else {
+      recordButton.classList.remove('recording');
+      recordingInterface.classList.remove('is-live');
+      liveTitle.style.display = 'none';
+      liveCanvas.style.display = 'none';
+      liveTimer.style.display = 'none';
+      
+      const icon = recordButton.querySelector('i') as HTMLElement;
+      icon.className = 'fas fa-microphone';
+    }
+  }
+
+  private startRecordingTimer() {
+    const timerDisplay = document.getElementById('liveRecordingTimerDisplay') as HTMLElement;
+    
+    this.recordingTimer = window.setInterval(() => {
+      const elapsed = Math.floor((Date.now() - this.recordingStartTime) / 1000);
+      const minutes = Math.floor(elapsed / 60);
+      const seconds = elapsed % 60;
+      const centiseconds = Math.floor(((Date.now() - this.recordingStartTime) % 1000) / 10);
+      
+      timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${centiseconds.toString().padStart(2, '0')}`;
+      
+      if (elapsed >= this.recordingDuration) {
+        this.stopRecording();
+      }
+    }, 10);
+  }
+
+  private stopRecordingTimer() {
+    if (this.recordingTimer) {
+      clearInterval(this.recordingTimer);
+      this.recordingTimer = null;
+    }
+  }
+
+  private setupLiveWaveform(stream: MediaStream) {
     this.liveWaveformCanvas = document.getElementById('liveWaveformCanvas') as HTMLCanvasElement;
-    this.liveRecordingTimerDisplay = document.getElementById('liveRecordingTimerDisplay') as HTMLDivElement;
-
-    if (this.liveWaveformCanvas) {
-      this.liveWaveformCtx = this.liveWaveformCanvas.getContext('2d');
-    } else {
-      console.warn('Live waveform canvas element not found. Visualizer will not work.');
-    }
-
-    if (this.recordingInterface) {
-      this.statusIndicatorDiv = this.recordingInterface.querySelector('.status-indicator') as HTMLDivElement;
-    } else {
-      console.warn('Recording interface element not found.');
-      this.statusIndicatorDiv = null;
-    }
+    this.liveWaveformContext = this.liveWaveformCanvas.getContext('2d');
     
-    this.durationInput.value = String(this.userDefinedMaxRecordingMinutes);
+    if (!this.liveWaveformContext) return;
 
-    this.bindEventListeners();
-    this.initTheme();
-    this.createNewNote();
+    this.audioContext = new AudioContext();
+    this.analyser = this.audioContext.createAnalyser();
+    const source = this.audioContext.createMediaStreamSource(stream);
+    source.connect(this.analyser);
 
-    this.recordingStatus.textContent = 'Prêt à enregistrer ou téléverser.';
-  }
+    this.analyser.fftSize = 256;
+    const bufferLength = this.analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
 
-  private bindEventListeners(): void {
-    this.recordButton.addEventListener('click', () => this.toggleRecording());
-    this.newButton.addEventListener('click', () => this.createNewNote());
-    this.themeToggleButton.addEventListener('click', () => this.toggleTheme());
-    this.copySummaryButton.addEventListener('click', () => this.copySummaryToClipboard());
-    this.saveSummaryButton.addEventListener('click', () => this.saveSummaryToFile());
-    this.saveAllButton.addEventListener('click', () => this.saveAllPackage());
-    this.copyRawTranscriptionButton.addEventListener('click', () => this.copyRawTranscriptionToClipboard());
-    
-    this.uploadAudioButton.addEventListener('click', () => this.triggerFileUpload());
-    this.audioFileUploadInput.addEventListener('change', (event) => this.handleFileUpload(event));
+    const draw = () => {
+      if (!this.isRecording || !this.liveWaveformContext || !this.analyser) return;
 
-    this.uploadPdfButton.addEventListener('click', () => this.triggerPdfUpload());
-    this.pdfFileUploadInput.addEventListener('change', (event) => this.handlePdfUpload(event));
-    
-    this.setDurationButton.addEventListener('click', () => this.handleSetDuration());
-    this.refreshAllButton.addEventListener('click', () => this.handleRefreshAllFromRawText());
-    this.refreshNoteFromSummaryButton.addEventListener('click', () => this.handleRefreshDetailedNoteFromSummary());
+      this.animationId = requestAnimationFrame(draw);
+      this.analyser.getByteFrequencyData(dataArray);
 
-    window.addEventListener('resize', this.handleResize.bind(this));
-  }
+      const canvas = this.liveWaveformCanvas!;
+      const ctx = this.liveWaveformContext;
+      
+      ctx.fillStyle = 'rgba(18, 18, 18, 0.3)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  private handleSetDuration(): void {
-    if (this.isProcessingFile) {
-        this.recordingStatus.textContent = 'Veuillez attendre la fin du traitement en cours.';
-        setTimeout(() => {
-             if (this.recordingStatus.textContent === 'Veuillez attendre la fin du traitement en cours.') {
-                this.recordingStatus.textContent = this.getCurrentBaseStatus();
-             }
-        }, 3000);
-        return;
-    }
-    if (this.isRecording) {
-        this.recordingStatus.textContent = 'La durée ne peut être modifiée pendant l\'enregistrement.';
-        setTimeout(() => {
-            if (this.recordingStatus.textContent === 'La durée ne peut être modifiée pendant l\'enregistrement.') {
-                 this.recordingStatus.textContent = this.getCurrentBaseStatus();
-            }
-        }, 3000);
-        if (this.activeRecordingOriginalMinutesSetting) {
-            this.durationInput.value = String(this.activeRecordingOriginalMinutesSetting);
-        } else {
-            this.durationInput.value = String(this.userDefinedMaxRecordingMinutes);
-        }
-        return;
-    }
+      const barWidth = (canvas.width / bufferLength) * 2.5;
+      let barHeight;
+      let x = 0;
 
-    const newDurationMinutes = parseInt(this.durationInput.value, 10);
-    if (!isNaN(newDurationMinutes) && newDurationMinutes >= 1 && newDurationMinutes <= 120) {
-        this.userDefinedMaxRecordingMinutes = newDurationMinutes;
-        this.recordingStatus.textContent = `Durée max réglée à ${newDurationMinutes} minutes.`;
-    } else {
-        this.recordingStatus.textContent = 'Durée invalide. Entrez une valeur entre 1 et 120 minutes.';
-        this.durationInput.value = String(this.userDefinedMaxRecordingMinutes);
-    }
-    setTimeout(() => {
-        const currentStatus = this.recordingStatus.textContent || "";
-        if (currentStatus.startsWith('Durée max réglée') || currentStatus.startsWith('Durée invalide')) {
-            this.recordingStatus.textContent = this.getCurrentBaseStatus();
-        }
-    }, 3000);
-  }
-
-  private triggerFileUpload(): void {
-    if (this.isRecording) {
-      this.displayTemporaryStatus('Veuillez arrêter l\'enregistrement avant de téléverser un fichier audio.', this.getCurrentBaseStatus());
-      return;
-    }
-    if (this.isProcessingFile) {
-        this.displayTemporaryStatus('Veuillez attendre la fin du traitement du fichier actuel.', this.getCurrentBaseStatus());
-        return;
-    }
-    this.audioFileUploadInput.click();
-  }
-
-  private triggerPdfUpload(): void {
-    if (this.isRecording) {
-      this.displayTemporaryStatus('Veuillez arrêter l\'enregistrement avant de téléverser un PDF.', this.getCurrentBaseStatus());
-      return;
-    }
-    if (this.isProcessingFile) {
-      this.displayTemporaryStatus('Veuillez attendre la fin du traitement du fichier actuel.', this.getCurrentBaseStatus());
-      return;
-    }
-    if (typeof pdfjsLib === 'undefined') {
-        this.recordingStatus.textContent = "Erreur: La fonctionnalité PDF n'est pas disponible.";
-        console.error("pdfjsLib is not defined. Cannot upload PDF.");
-        return;
-    }
-    this.pdfFileUploadInput.click();
-  }
-
-  private displayTemporaryStatus(message: string, revertToStatus: string, duration: number = 3000): void {
-    const originalStatus = this.recordingStatus.textContent;
-    this.recordingStatus.textContent = message;
-    setTimeout(() => {
-        if (this.recordingStatus.textContent === message) {
-            this.recordingStatus.textContent = revertToStatus;
-        }
-    }, duration);
-  }
-
-  private async handleFileUpload(event: Event): Promise<void> {
-    const input = event.target as HTMLInputElement;
-    if (!input.files || input.files.length === 0) return;
-    
-    const file = input.files[0];
-
-    if (!file.type.startsWith('audio/')) {
-      this.displayTemporaryStatus('Type de fichier non supporté. Veuillez sélectionner un fichier audio.', this.getCurrentBaseStatus());
-      input.value = '';
-      return;
-    }
-    
-    this.isProcessingFile = true;
-    this.setButtonsDisabled(true);
-    this.createNewNote('audio');
-
-    const fileName = file.name;
-    const lastDotIndex = fileName.lastIndexOf('.');
-    const titleWithoutExtension = lastDotIndex > 0 ? fileName.substring(0, lastDotIndex) : fileName;
-    if (this.editorTitle) {
-      this.editorTitle.textContent = titleWithoutExtension.replace(/_/g, ' ');
-      this.editorTitle.classList.remove('placeholder-active');
-    }
-
-    this.recordingStatus.textContent = 'Traitement du fichier audio téléversé...';
-    try {
-      await this.processAudio(file, file.type);
-    } catch (err) {
-      console.error('Error processing uploaded file:', err);
-      this.recordingStatus.textContent = 'Erreur lors du traitement du fichier audio.';
-      if (this.currentNote) {
-        this.currentNote.summary = '';
-        this.currentNote.polishedNote = `Error processing uploaded audio: ${err instanceof Error ? err.message : String(err)}`;
+      for (let i = 0; i < bufferLength; i++) {
+        barHeight = (dataArray[i] / 255) * canvas.height * 0.8;
+        
+        const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+        gradient.addColorStop(0, '#82aaff');
+        gradient.addColorStop(1, '#c792ea');
+        
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+        
+        x += barWidth + 1;
       }
-      this.updateSummaryEditorDisplay('');
-      this.updatePolishedNoteDisplay();
-      await this.generateAndSetDocumentTitleLLM(this.currentNote?.rawTranscription || '');
-    } finally {
-        this.isProcessingFile = false;
-        this.setButtonsDisabled(false);
-        input.value = '';
-        if (!this.recordingStatus.textContent?.includes('Erreur')) {
-           this.recordingStatus.textContent = this.getCurrentBaseStatus();
-        }
+    };
+
+    draw();
+  }
+
+  private stopLiveWaveform() {
+    if (this.animationId) {
+      cancelAnimationFrame(this.animationId);
+      this.animationId = null;
+    }
+    
+    if (this.audioContext) {
+      this.audioContext.close();
+      this.audioContext = null;
     }
   }
 
-  private async handlePdfUpload(event: Event): Promise<void> {
-    const input = event.target as HTMLInputElement;
-    if (!input.files || input.files.length === 0) return;
+  private setupTabNavigation() {
+    const tabNav = document.querySelector(".tab-navigation") as HTMLElement;
+    const tabButtons = tabNav.querySelectorAll(".tab-button");
+    const activeTabIndicator = tabNav.querySelector(".active-tab-indicator") as HTMLElement;
+    const noteContents = document.querySelectorAll(".note-content");
 
-    const file = input.files[0];
-    if (file.type !== 'application/pdf') {
-      this.displayTemporaryStatus('Type de fichier non supporté. Veuillez sélectionner un fichier PDF.', this.getCurrentBaseStatus());
-      input.value = '';
-      return;
-    }
-    
-    this.isProcessingFile = true;
-    this.setButtonsDisabled(true);
-    this.createNewNote('pdf');
+    function setActiveTab(activeButton: HTMLElement, skipAnimation = false) {
+      if (!activeButton || !activeTabIndicator) return;
 
-    const fileName = file.name;
-    const lastDotIndex = fileName.lastIndexOf('.');
-    const titleWithoutExtension = lastDotIndex > 0 ? fileName.substring(0, lastDotIndex) : fileName;
-    if (this.editorTitle) {
-      this.editorTitle.textContent = titleWithoutExtension.replace(/_/g, ' ');
-      this.editorTitle.classList.remove('placeholder-active');
-    }
+      tabButtons.forEach((btn) => btn.classList.remove("active"));
+      activeButton.classList.add("active");
 
-    this.recordingStatus.textContent = 'Traitement du PDF...';
-    let extractedText = '';
-    try {
-      this.recordingStatus.textContent = 'Extraction du texte du PDF...';
-      extractedText = await this.extractTextFromPdf(file);
+      const tabName = activeButton.getAttribute("data-tab");
+      noteContents.forEach((content) => content.classList.remove("active"));
 
-      if (!extractedText || extractedText.trim() === '') {
-        this.recordingStatus.textContent = 'Aucun texte n\'a pu être extrait du PDF.';
-        if (this.currentNote) {
-            this.currentNote.rawTranscription = '';
-            this.currentNote.summary = '';
-            this.currentNote.polishedNote = "Aucun texte extrait du PDF. Le résumé et la note détaillée ne peuvent être générés.";
+      let targetContentId;
+      if (tabName === "summary") {
+        targetContentId = "summaryEditor";
+      } else if (tabName === "note") {
+        targetContentId = "polishedNote";
+      } else if (tabName === "raw") {
+        targetContentId = "rawTranscription";
+      }
+
+      if (targetContentId) {
+        const targetContentDiv = document.getElementById(targetContentId);
+        if (targetContentDiv) {
+          targetContentDiv.classList.add("active");
         }
-        this.updateRawTranscriptionDisplay('');
-        this.updateSummaryEditorDisplay('');
-        this.updatePolishedNoteDisplay();
-        await this.generateAndSetDocumentTitleLLM('');
-        return;
+      }
+
+      const originalTransition = activeTabIndicator.style.transition;
+      if (skipAnimation) {
+        activeTabIndicator.style.transition = "none";
+      } else {
+        activeTabIndicator.style.transition = "";
+      }
+
+      activeTabIndicator.style.left = `${activeButton.offsetLeft}px`;
+      activeTabIndicator.style.width = `${activeButton.offsetWidth}px`;
+
+      if (skipAnimation) {
+        activeTabIndicator.offsetHeight;
+        activeTabIndicator.style.transition = originalTransition;
+      }
+    }
+
+    tabButtons.forEach((button) => {
+      button.addEventListener("click", (e) => {
+        setActiveTab(e.currentTarget as HTMLElement);
+      });
+    });
+
+    const initiallyActiveButton = tabNav.querySelector(".tab-button.active") as HTMLElement;
+    if (initiallyActiveButton) {
+      requestAnimationFrame(() => {
+        setActiveTab(initiallyActiveButton, true);
+      });
+    }
+
+    window.addEventListener("resize", () => {
+      requestAnimationFrame(() => {
+        const currentActiveButton = tabNav.querySelector(".tab-button.active") as HTMLElement;
+        if (currentActiveButton) {
+          setActiveTab(currentActiveButton, true);
+        }
+      });
+    });
+  }
+
+  private setupThemeToggle() {
+    const themeToggleButton = document.getElementById('themeToggleButton') as HTMLButtonElement;
+    const icon = themeToggleButton.querySelector('i') as HTMLElement;
+    
+    themeToggleButton.addEventListener('click', () => {
+      document.body.classList.toggle('light-mode');
+      const isLightMode = document.body.classList.contains('light-mode');
+      
+      if (isLightMode) {
+        icon.className = 'fas fa-moon';
+      } else {
+        icon.className = 'fas fa-sun';
       }
       
-      this.updateRawTranscriptionDisplay(extractedText);
-      if (this.currentNote) this.currentNote.rawTranscription = extractedText;
+      localStorage.setItem('theme', isLightMode ? 'light' : 'dark');
+    });
 
-      this.recordingStatus.textContent = 'Génération du résumé du PDF...';
-      const summary = await this.generateSummaryLLM(extractedText);
-      
-      if (this.currentNote) {
-        this.currentNote.summary = summary;
-        this.currentNote.polishedNote = "La note détaillée pour les PDF est contextuelle. Le texte intégral extrait du PDF est dans l'onglet 'Brut' et le résumé est ci-dessus (ou dans l'onglet 'Résumé').";
-      }
-      this.updateSummaryEditorDisplay(summary);
-      this.updatePolishedNoteDisplay();
-      await this.generateAndSetDocumentTitleLLM(extractedText);
-      this.recordingStatus.textContent = 'Résumé du PDF généré.';
-
-    } catch (err) {
-      console.error('Error processing PDF file:', err);
-      this.recordingStatus.textContent = 'Erreur lors du traitement du PDF.';
-      if (this.currentNote) {
-        this.currentNote.rawTranscription = (err instanceof Error ? `Erreur d'extraction PDF: ${err.message}` : `Erreur d'extraction PDF.`);
-        this.currentNote.summary = '';
-        this.currentNote.polishedNote = `Erreur lors du traitement du PDF: ${err instanceof Error ? err.message : String(err)}`;
-      }
-      this.updateRawTranscriptionDisplay(this.currentNote?.rawTranscription || '');
-      this.updateSummaryEditorDisplay('');
-      this.updatePolishedNoteDisplay();
-      await this.generateAndSetDocumentTitleLLM(this.currentNote?.rawTranscription || extractedText);
-    } finally {
-      this.isProcessingFile = false;
-      this.setButtonsDisabled(false);
-      input.value = '';
-       if (!this.recordingStatus.textContent?.includes('Erreur') && !this.recordingStatus.textContent?.includes('Aucun texte')) {
-           this.recordingStatus.textContent = this.getCurrentBaseStatus();
-        }
-    }
-  }
-
-  private async extractTextFromPdf(file: File): Promise<string> {
-    if (typeof pdfjsLib === 'undefined') {
-        console.error("pdfjsLib is not defined. Cannot extract text from PDF.");
-        throw new Error("La bibliothèque PDF n'est pas chargée.");
-    }
-    const arrayBuffer = await file.arrayBuffer();
-    const pdfDoc = await pdfjsLib.getDocument(arrayBuffer).promise;
-    let fullText = '';
-
-    for (let i = 1; i <= pdfDoc.numPages; i++) {
-      const page = await pdfDoc.getPage(i);
-      const textContent = await page.getTextContent();
-      fullText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
-    }
-    return fullText;
-  }
-
-  private handleResize(): void {
-    if (this.isRecording && this.liveWaveformCanvas && this.liveWaveformCanvas.style.display === 'block') {
-      requestAnimationFrame(() => { this.setupCanvasDimensions(); });
-    }
-  }
-
-  private setupCanvasDimensions(): void {
-    if (!this.liveWaveformCanvas || !this.liveWaveformCtx) return;
-    const canvas = this.liveWaveformCanvas;
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = Math.round(rect.width * dpr);
-    canvas.height = Math.round(rect.height * dpr);
-    this.liveWaveformCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  private initTheme(): void {
+    // Load saved theme
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'light') {
       document.body.classList.add('light-mode');
-      this.themeToggleIcon.classList.remove('fa-sun');
-      this.themeToggleIcon.classList.add('fa-moon');
-    } else {
-      document.body.classList.remove('light-mode');
-      this.themeToggleIcon.classList.remove('fa-moon');
-      this.themeToggleIcon.classList.add('fa-sun');
+      icon.className = 'fas fa-moon';
     }
   }
 
-  private toggleTheme(): void {
-    document.body.classList.toggle('light-mode');
-    if (document.body.classList.contains('light-mode')) {
-      localStorage.setItem('theme', 'light');
-      this.themeToggleIcon.classList.remove('fa-sun');
-      this.themeToggleIcon.classList.add('fa-moon');
-    } else {
-      localStorage.setItem('theme', 'dark');
-      this.themeToggleIcon.classList.remove('fa-moon');
-      this.themeToggleIcon.classList.add('fa-sun');
-    }
-  }
-
-  private async toggleRecording(): Promise<void> {
-    if (this.isProcessingFile) {
-      this.displayTemporaryStatus('Veuillez attendre la fin du traitement du fichier actuel.', this.getCurrentBaseStatus());
-      return;
-    }
-    if (!this.isRecording) {
-      await this.startRecording();
-    } else {
-      await this.stopRecording();
-    }
-  }
-
-  private setupAudioVisualizer(): void {
-    if (!this.stream || this.audioContext) return;
-    this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const source = this.audioContext.createMediaStreamSource(this.stream);
-    this.analyserNode = this.audioContext.createAnalyser();
-    this.analyserNode.fftSize = 256;
-    this.analyserNode.smoothingTimeConstant = 0.75;
-    const bufferLength = this.analyserNode.frequencyBinCount;
-    this.waveformDataArray = new Uint8Array(bufferLength);
-    source.connect(this.analyserNode);
-  }
-
-  private drawLiveWaveform(): void {
-    if (!this.analyserNode || !this.waveformDataArray || !this.liveWaveformCtx || !this.liveWaveformCanvas || !this.isRecording) {
-      if (this.waveformDrawingId) cancelAnimationFrame(this.waveformDrawingId);
-      this.waveformDrawingId = null;
-      return;
-    }
-    this.waveformDrawingId = requestAnimationFrame(() => this.drawLiveWaveform());
-    this.analyserNode.getByteFrequencyData(this.waveformDataArray);
-    const ctx = this.liveWaveformCtx;
-    const canvas = this.liveWaveformCanvas;
-    const logicalWidth = canvas.clientWidth;
-    const logicalHeight = canvas.clientHeight;
-    ctx.clearRect(0, 0, logicalWidth, logicalHeight);
-    const bufferLength = this.analyserNode.frequencyBinCount;
-    const numBars = Math.floor(bufferLength * 0.5);
-    if (numBars === 0) return;
-    const totalBarPlusSpacingWidth = logicalWidth / numBars;
-    const barWidth = Math.max(1, Math.floor(totalBarPlusSpacingWidth * 0.7));
-    const barSpacing = Math.max(0, Math.floor(totalBarPlusSpacingWidth * 0.3));
-    let x = 0;
-    const recordingColor = getComputedStyle(document.documentElement).getPropertyValue('--color-recording').trim() || '#ff3b30';
-    ctx.fillStyle = recordingColor;
-    for (let i = 0; i < numBars; i++) {
-      if (x >= logicalWidth) break;
-      const dataIndex = Math.floor(i * (bufferLength / numBars));
-      const barHeightNormalized = this.waveformDataArray[dataIndex] / 255.0;
-      let barHeight = barHeightNormalized * logicalHeight;
-      if (barHeight < 1 && barHeight > 0) barHeight = 1;
-      barHeight = Math.round(barHeight);
-      const y = Math.round((logicalHeight - barHeight) / 2);
-      ctx.fillRect(Math.floor(x), y, barWidth, barHeight);
-      x += barWidth + barSpacing;
-    }
-  }
-
-  private updateLiveTimer(): void {
-    if (!this.isRecording || !this.liveRecordingTimerDisplay || this.activeRecordingMaxDurationMs === null) return;
-    const now = Date.now();
-    const elapsedMs = now - this.recordingStartTime;
-    const totalElapsedSeconds = Math.floor(elapsedMs / 1000);
-    const elapsedMinutes = Math.floor(totalElapsedSeconds / 60);
-    const elapsedSeconds = totalElapsedSeconds % 60;
-    const elapsedHundredths = Math.floor((elapsedMs % 1000) / 10);
-    let timerText = `${String(elapsedMinutes).padStart(2, '0')}:${String(elapsedSeconds).padStart(2, '0')}.${String(elapsedHundredths).padStart(2, '0')}`;
-    if (this.maxDurationTimeoutId && this.activeRecordingMaxDurationMs) {
-        const remainingMs = Math.max(0, this.activeRecordingMaxDurationMs - elapsedMs);
-        const totalRemainingSeconds = Math.floor(remainingMs / 1000);
-        const remainingMinutes = Math.floor(totalRemainingSeconds / 60);
-        const remainingSeconds = totalRemainingSeconds % 60;
-        timerText += ` (Restant: ${String(remainingMinutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')})`;
-    }
-    this.liveRecordingTimerDisplay.textContent = timerText;
-  }
-
-  private startLiveDisplay(): void {
-    if (!this.recordingInterface || !this.liveRecordingTitle || !this.liveWaveformCanvas || !this.liveRecordingTimerDisplay) {
-      console.warn('One or more live display elements are missing. Cannot start live display.');
-      return;
-    }
-    this.recordingInterface.classList.add('is-live');
-    this.liveRecordingTitle.style.display = 'block';
-    this.liveWaveformCanvas.style.display = 'block';
-    this.liveRecordingTimerDisplay.style.display = 'block';
-    this.setupCanvasDimensions();
-    if (this.statusIndicatorDiv) this.statusIndicatorDiv.style.display = 'none';
-    const iconElement = this.recordButton.querySelector('.record-button-inner i') as HTMLElement;
-    if (iconElement) {
-      iconElement.classList.remove('fa-microphone');
-      iconElement.classList.add('fa-stop');
-    }
-    const currentTitle = this.editorTitle.textContent?.trim();
-    const placeholder = this.editorTitle.getAttribute('placeholder') || 'Untitled Note';
-    this.liveRecordingTitle.textContent = currentTitle && currentTitle !== placeholder ? currentTitle : 'New Recording';
-    this.setupAudioVisualizer();
-    this.drawLiveWaveform();
-    this.recordingStartTime = Date.now();
-    this.updateLiveTimer();
-    if (this.timerIntervalId) clearInterval(this.timerIntervalId);
-    this.timerIntervalId = window.setInterval(() => this.updateLiveTimer(), 50);
-  }
-
-  private stopLiveDisplay(): void {
-    if (!this.recordingInterface || !this.liveRecordingTitle || !this.liveWaveformCanvas || !this.liveRecordingTimerDisplay) {
-      if (this.recordingInterface) this.recordingInterface.classList.remove('is-live');
-      return;
-    }
-    this.recordingInterface.classList.remove('is-live');
-    this.liveRecordingTitle.style.display = 'none';
-    this.liveWaveformCanvas.style.display = 'none';
-    this.liveRecordingTimerDisplay.style.display = 'none';
-    if (this.statusIndicatorDiv) this.statusIndicatorDiv.style.display = 'block';
-    const iconElement = this.recordButton.querySelector('.record-button-inner i') as HTMLElement;
-    if (iconElement) {
-      iconElement.classList.remove('fa-stop');
-      iconElement.classList.add('fa-microphone');
-    }
-    if (this.waveformDrawingId) {
-      cancelAnimationFrame(this.waveformDrawingId);
-      this.waveformDrawingId = null;
-    }
-    if (this.timerIntervalId) {
-      clearInterval(this.timerIntervalId);
-      this.timerIntervalId = null;
-    }
-    if (this.liveWaveformCtx && this.liveWaveformCanvas) {
-      this.liveWaveformCtx.clearRect(0, 0, this.liveWaveformCanvas.width, this.liveWaveformCanvas.height);
-    }
-    if (this.audioContext) {
-      if (this.audioContext.state !== 'closed') {
-        this.audioContext.close().catch((e) => console.warn('Error closing audio context', e));
-      }
-      this.audioContext = null;
-    }
-    this.analyserNode = null;
-    this.waveformDataArray = null;
-  }
-
-  private async startRecording(): Promise<void> {
-    try {
-      this.audioChunks = [];
-      if (this.stream) {
-        this.stream.getTracks().forEach((track) => track.stop());
-        this.stream = null;
-      }
-      if (this.audioContext && this.audioContext.state !== 'closed') {
-        await this.audioContext.close();
-        this.audioContext = null;
-      }
-      this.recordingStatus.textContent = 'Demande d\'accès au microphone...';
-      this.createNewNote('audio');
-      try {
-        this.stream = await navigator.mediaDevices.getUserMedia({audio: true});
-      } catch (err) {
-        console.error('Failed with basic constraints:', err);
-        this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-      }
-      try {
-        this.mediaRecorder = new MediaRecorder(this.stream, { mimeType: 'audio/webm' });
-      } catch (e) {
-        console.error('audio/webm not supported, trying default:', e);
-        this.mediaRecorder = new MediaRecorder(this.stream);
-      }
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) this.audioChunks.push(event.data);
-      };
-      this.mediaRecorder.onstop = () => {
-        this.stopLiveDisplay();
-        const stoppedByTimeout = this.recordingStatus.textContent?.includes(`limite ${this.activeRecordingOriginalMinutesSetting} min`);
-        if (this.audioChunks.length > 0) {
-          const audioBlob = new Blob(this.audioChunks, { type: this.mediaRecorder?.mimeType || 'audio/webm' });
-          this.isProcessingFile = true;
-          this.setButtonsDisabled(true);
-          this.processAudio(audioBlob, this.mediaRecorder?.mimeType || 'audio/webm').catch((err) => { // Pass mimeType explicitly
-            console.error('Error processing audio:', err);
-            const baseStatus = this.getCurrentBaseStatus();
-            if (stoppedByTimeout) {
-                 this.recordingStatus.textContent = `Enregistrement arrêté (limite ${this.activeRecordingOriginalMinutesSetting} min). Erreur de traitement.`;
-            } else {
-                this.recordingStatus.textContent = 'Erreur lors du traitement de l\'enregistrement';
-            }
-            setTimeout(() => {
-                if (this.recordingStatus.textContent && this.recordingStatus.textContent.includes('Erreur')) {
-                    this.recordingStatus.textContent = baseStatus;
-                }
-            }, 3000);
-          }).finally(() => {
-            this.isProcessingFile = false;
-            this.setButtonsDisabled(false);
-            if (!this.recordingStatus.textContent?.includes('Erreur')) {
-                 this.recordingStatus.textContent = this.getCurrentBaseStatus();
-            }
-          });
-        } else {
-          if (!stoppedByTimeout) {
-             this.recordingStatus.textContent = 'Aucune donnée audio capturée. Veuillez réessayer.';
-          }
-           this.recordingStatus.textContent = this.getCurrentBaseStatus();
-        }
-        if (this.stream) {
-          this.stream.getTracks().forEach((track) => { track.stop(); });
-          this.stream = null;
-        }
-      };
-      this.activeRecordingOriginalMinutesSetting = this.userDefinedMaxRecordingMinutes;
-      this.activeRecordingMaxDurationMs = this.activeRecordingOriginalMinutesSetting * 60 * 1000;
-      this.mediaRecorder.start();
-      this.isRecording = true;
-      this.recordButton.classList.add('recording');
-      this.recordButton.setAttribute('title', 'Stop Recording');
-      this.recordingStatus.textContent = `Enregistrement en cours... (max ${this.activeRecordingOriginalMinutesSetting} minutes)`;
-      if (this.maxDurationTimeoutId) {
-        clearTimeout(this.maxDurationTimeoutId);
-        this.maxDurationTimeoutId = null;
-      }
-      this.maxDurationTimeoutId = window.setTimeout(() => {
-        if (this.isRecording) {
-          console.log(`Recording automatically stopped after ${this.activeRecordingOriginalMinutesSetting} minutes.`);
-          this.stopRecording(true);
-        }
-      }, this.activeRecordingMaxDurationMs);
-      this.startLiveDisplay();
-    } catch (error) {
-      console.error('Error starting recording:', error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorName = error instanceof Error ? error.name : 'Unknown';
-      if (errorName === 'NotAllowedError' || errorName === 'PermissionDeniedError') {
-        this.recordingStatus.textContent = 'Permission du microphone refusée. Veuillez vérifier les paramètres du navigateur et recharger la page.';
-      } else if (errorName === 'NotFoundError' || (errorName === 'DOMException' && errorMessage.includes('Requested device not found'))) {
-        this.recordingStatus.textContent = 'Aucun microphone trouvé. Veuillez connecter un microphone.';
-      } else if (errorName === 'NotReadableError' || errorName === 'AbortError' || (errorName === 'DOMException' && errorMessage.includes('Failed to allocate audiosource'))) {
-        this.recordingStatus.textContent = 'Impossible d\'accéder au microphone. Il est peut-être utilisé par une autre application.';
-      } else {
-        this.recordingStatus.textContent = `Erreur : ${errorMessage}`;
-      }
-      this.isRecording = false;
-      if (this.stream) {
-        this.stream.getTracks().forEach((track) => track.stop());
-        this.stream = null;
-      }
-      if (this.maxDurationTimeoutId) {
-        clearTimeout(this.maxDurationTimeoutId);
-        this.maxDurationTimeoutId = null;
-      }
-      this.activeRecordingMaxDurationMs = null;
-      this.activeRecordingOriginalMinutesSetting = null;
-      this.recordButton.classList.remove('recording');
-      this.recordButton.setAttribute('title', 'Start Recording');
-      this.stopLiveDisplay();
-      this.recordingStatus.textContent = this.getCurrentBaseStatus();
-    }
-  }
-
-  private playBeepSound(): void {
-    try {
-      const beepAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      if (!beepAudioContext) {
-        console.warn('AudioContext not supported, cannot play beep.');
-        return;
-      }
-      const oscillator = beepAudioContext.createOscillator();
-      const gainNode = beepAudioContext.createGain();
-      oscillator.connect(gainNode);
-      gainNode.connect(beepAudioContext.destination);
-      gainNode.gain.setValueAtTime(0, beepAudioContext.currentTime);
-      gainNode.gain.linearRampToValueAtTime(0.25, beepAudioContext.currentTime + 0.01);
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(880, beepAudioContext.currentTime);
-      oscillator.start(beepAudioContext.currentTime);
-      gainNode.gain.setValueAtTime(0.25, beepAudioContext.currentTime + 0.15);
-      gainNode.gain.linearRampToValueAtTime(0, beepAudioContext.currentTime + 0.20);
-      oscillator.stop(beepAudioContext.currentTime + 0.20);
-      oscillator.onended = () => {
-        beepAudioContext.close().catch(e => console.warn("Error closing beep audio context:", e));
-      };
-    } catch (error) {
-      console.warn('Could not play beep sound:', error);
-    }
-  }
-
-  private async stopRecording(stoppedByTimeout = false): Promise<void> {
-    const currentRecordingMinutes = this.activeRecordingOriginalMinutesSetting || this.userDefinedMaxRecordingMinutes;
-    if (stoppedByTimeout) { this.playBeepSound(); }
-    if (this.maxDurationTimeoutId) {
-      clearTimeout(this.maxDurationTimeoutId);
-      this.maxDurationTimeoutId = null;
-    }
-    if (this.mediaRecorder && this.isRecording) {
-      try {
-        if (stoppedByTimeout) {
-            this.recordingStatus.textContent = `Enregistrement arrêté (limite ${currentRecordingMinutes} min). Traitement...`;
-        } else {
-            if (!this.recordingStatus.textContent?.includes(`limite ${currentRecordingMinutes} min`)) {
-               this.recordingStatus.textContent = 'Traitement audio en cours...';
-            }
-        }
-        this.mediaRecorder.stop();
-      } catch (e) {
-        console.error('Error stopping MediaRecorder:', e);
-        this.stopLiveDisplay();
-        this.isProcessingFile = false;
-        this.setButtonsDisabled(false);
-        this.recordingStatus.textContent = this.getCurrentBaseStatus();
-      }
-      this.isRecording = false;
-      this.recordButton.classList.remove('recording');
-      this.recordButton.setAttribute('title', 'Start Recording');
-    } else {
-       if (!this.isRecording) { this.stopLiveDisplay(); }
-    }
-  }
-
-  private async processAudio(audioBlob: Blob, explicitMimeType?: string): Promise<void> {
-    if (this.currentNote) {
-        this.currentNote.audioBlob = audioBlob;
-        this.currentNote.audioMimeType = explicitMimeType || this.mediaRecorder?.mimeType || audioBlob.type || 'audio/webm';
-    }
-
-    const currentRecordingMinutes = this.activeRecordingOriginalMinutesSetting || this.userDefinedMaxRecordingMinutes;
-    const isTimeoutStop = this.recordingStatus.textContent?.includes(`limite ${currentRecordingMinutes} min`);
-
-    if (audioBlob.size === 0) {
-      if (!isTimeoutStop) {
-         this.recordingStatus.textContent = 'Aucune donnée audio capturée. Veuillez réessayer.';
-      } else {
-         this.recordingStatus.textContent = `Enregistrement arrêté (limite ${currentRecordingMinutes} min). Aucune donnée.`;
-      }
-      this.updateRawTranscriptionDisplay('');
-      this.updateSummaryEditorDisplay('');
-      this.updatePolishedNoteDisplay();
-      await this.generateAndSetDocumentTitleLLM('');
-      return;
-    }
-
-    let rawTextForTitle: string = '';
-    try {
-      URL.createObjectURL(audioBlob);
-      this.recordingStatus.textContent = (isTimeoutStop ? `Enregistrement arrêté (limite ${currentRecordingMinutes} min). ` : '') + 'Conversion audio en cours...';
-      const reader = new FileReader();
-      const readResult = new Promise<string>((resolve, reject) => {
-        reader.onloadend = () => {
-          try {
-            const base64data = reader.result as string;
-            const base64Audio = base64data.split(',')[1];
-            resolve(base64Audio);
-          } catch (err) { reject(err); }
-        };
-        reader.onerror = () => reject(reader.error);
-      });
-      reader.readAsDataURL(audioBlob);
-      const base64Audio = await readResult;
-      if (!base64Audio) throw new Error('Failed to convert audio to base64');
-      const mimeTypeToUse = this.currentNote?.audioMimeType || 'audio/webm'; // Use stored mimetype
-      rawTextForTitle = await this.getTranscription(base64Audio, mimeTypeToUse);
-    } catch (error) {
-      console.error('Error in processAudio:', error);
-      const errorStatus = isTimeoutStop ? `Enregistrement arrêté (limite ${currentRecordingMinutes} min). Erreur de traitement.` : 'Erreur lors du traitement de l\'enregistrement. Veuillez réessayer.';
-      this.recordingStatus.textContent = errorStatus;
-      if (this.currentNote) {
-        this.currentNote.rawTranscription = '';
-        this.currentNote.summary = '';
-        this.currentNote.polishedNote = '';
-      }
-      this.updateRawTranscriptionDisplay('');
-      this.updateSummaryEditorDisplay('');
-      this.updatePolishedNoteDisplay();
-    } finally {
-        await this.generateAndSetDocumentTitleLLM(rawTextForTitle || this.currentNote?.rawTranscription || '');
-    }
-  }
-  
-  private updateRawTranscriptionDisplay(text: string): void {
-    this.updateContentEditableDiv(this.rawTranscription, text);
-  }
-
-  private updateSummaryEditorDisplay(text: string): void {
-    this.updateContentEditableDiv(this.summaryEditor, text);
-  }
-
-  private updateContentEditableDiv(div: HTMLDivElement, text: string): void {
-    if (text && text.trim() !== '') {
-      div.textContent = text;
-      div.classList.remove('placeholder-active');
-    } else {
-      const placeholder = div.getAttribute('placeholder') || '';
-      div.textContent = placeholder;
-      div.classList.add('placeholder-active');
-    }
-  }
-
-
-  private async getTranscription(base64Audio: string, mimeType: string): Promise<string> {
-    const currentRecordingMinutes = this.activeRecordingOriginalMinutesSetting || this.userDefinedMaxRecordingMinutes;
-    const statusPrefix = this.recordingStatus.textContent?.startsWith(`Enregistrement arrêté (limite ${currentRecordingMinutes} min).`) ? `Enregistrement arrêté (limite ${currentRecordingMinutes} min). ` : '';
-    let transcriptionText = '';
-    try {
-      this.recordingStatus.textContent = statusPrefix + 'Obtention de la transcription...';
-      const contents = [
-        {text: 'Generate a complete, detailed transcript of this audio, identifying different speakers (e.g., Speaker 1, Speaker 2). Ensure the output is plain text.'},
-        {inlineData: {mimeType: mimeType, data: base64Audio}},
-      ];
-      const response: GenerateContentResponse = await this.genAI.models.generateContent({ model: MODEL_NAME, contents: contents });
-      transcriptionText = response.text as string; // Cast to string
-
-      if (transcriptionText && this.currentNote) {
-        this.currentNote.rawTranscription = transcriptionText;
-        this.updateRawTranscriptionDisplay(transcriptionText);
-        
-        this.recordingStatus.textContent = statusPrefix + 'Génération du résumé...';
-        const summary = await this.generateSummaryLLM(transcriptionText);
-        this.currentNote.summary = summary;
-        this.updateSummaryEditorDisplay(summary);
-
-        this.recordingStatus.textContent = statusPrefix + 'Génération de la note détaillée...';
-        const polishedNote = await this.generatePolishedNoteLLM(transcriptionText, summary);
-        this.currentNote.polishedNote = polishedNote;
-        this.updatePolishedNoteDisplay();
-        this.recordingStatus.textContent = statusPrefix + 'Traitement terminé.';
-      } else {
-        this.recordingStatus.textContent = statusPrefix + 'La transcription a échoué ou est vide.';
-        this.updateRawTranscriptionDisplay('');
-        this.updateSummaryEditorDisplay('');
-        this.updatePolishedNoteDisplay();
-        if (this.currentNote) { this.currentNote.rawTranscription = ''; this.currentNote.summary = ''; this.currentNote.polishedNote = '';}
-      }
-    } catch (error) {
-      console.error('Error getting transcription and derived content:', error);
-      this.recordingStatus.textContent = statusPrefix + 'Erreur lors de la génération du contenu. Veuillez réessayer.';
-      this.updateRawTranscriptionDisplay('');
-      this.updateSummaryEditorDisplay('');
-      this.updatePolishedNoteDisplay();
-      if (this.currentNote) { this.currentNote.rawTranscription = ''; this.currentNote.summary = ''; this.currentNote.polishedNote = '';}
-    }
-    return transcriptionText;
-  }
-
-  private async generatePolishedNoteLLM(rawTranscriptionText: string, summaryContext: string): Promise<string> {
-    const prompt = `Based on the following raw transcription AND its accompanying summary, create a polished, well-formatted detailed note IN FRENCH.
-                  Retain speaker labels from the raw transcription (e.g., Speaker 1:).
-                  Remove filler words (um, uh, like), repetitions, and false starts from the raw transcription content.
-                  Correct grammar and sentence structure for clarity.
-                  The detailed note should expand on the summary, providing more context and information from the raw transcription, but be consistent with the key points highlighted in the summary.
-                  Format any lists or bullet points properly using markdown. Maintain all essential original content and meaning.
-                  The output should be in Markdown format.
-
-                  Raw transcription:
-                  ${rawTranscriptionText}
-
-                  Summary:
-                  ${summaryContext}`;
-    const contents = [{text: prompt}];
-    const response: GenerateContentResponse = await this.genAI.models.generateContent({ model: MODEL_NAME, contents: contents });
-    const noteText = response.text as string; // Cast to string
-    return noteText || '';
-  }
-
-  private async generateSummaryLLM(rawTranscriptionText: string): Promise<string> {
-    const prompt = `Basé sur le texte suivant (qui pourrait être une transcription avec identification des locuteurs ou du texte extrait d'un document), fournissez un résumé concis **en français**.
-Le résumé doit inclure :
-- Les points clés généraux.
-- Les décisions prises.
-- Les points d'action généraux (tâches à accomplir).
-
-De plus, à la toute fin du résumé, veuillez explicitement lister sous des titres dédiés :
-- Les **points spécifiques abordés durant la discussion/réunion** (par exemple, sous un titre comme "### Points Abordés"). Chaque point doit être formaté comme un élément de liste de tâches Markdown non cochée (par exemple, \`- [ ] Point abordé 1\`). Chaque point doit impérativement apparaître sur sa propre ligne distincte, c'est-à-dire **un seul point par ligne.**
-- Les **points spécifiques à réaliser** (par exemple, sous un titre comme "### Actions à Entreprendre"). Chaque point doit être formaté comme un élément de liste de tâches Markdown non cochée (par exemple, \`- [ ] Action à réaliser 1\`). Chaque point doit impérativement apparaître sur sa propre ligne distincte, c'est-à-dire **un seul point par ligne.**
-
-Assurez-vous que ces deux listes de tâches spécifiques soient les dernières sections du résumé et que chaque élément de ces listes soit sur une nouvelle ligne.
-Formatez l'ensemble du résumé en utilisant markdown, en structurant clairement toutes les sections demandées.
-
-Texte :
-${rawTranscriptionText}`;
-    const contents = [{text: prompt}];
-    const response: GenerateContentResponse = await this.genAI.models.generateContent({ model: MODEL_NAME, contents: contents });
-    const summaryText = response.text as string; // Cast to string
-    return summaryText || '';
-  }
-  
-  private updatePolishedNoteDisplay(): void {
-    const polishedNoteDiv = this.polishedNote;
-    polishedNoteDiv.innerHTML = '';
-    polishedNoteDiv.classList.remove('placeholder-active');
-
-    if (this.currentNote?.polishedNote && this.currentNote.polishedNote.trim() !== '') {
-      polishedNoteDiv.innerHTML = marked.parse(this.currentNote.polishedNote);
-    } else {
-      const placeholderText = this.currentNote?.sourceType === 'pdf'
-          ? "La note détaillée pour les PDF est contextuelle ou peut être générée si un résumé est fourni."
-          : polishedNoteDiv.getAttribute('placeholder') || 'La note détaillée (lecture seule) apparaîtra ici...';
-      polishedNoteDiv.innerHTML = `<p class="placeholder-text">${placeholderText}</p>`;
-      polishedNoteDiv.classList.add('placeholder-active');
-    }
-  }
-
-
-  private async generateAndSetDocumentTitleLLM(sourceText: string): Promise<void> {
-    if (!this.editorTitle) return;
-    const defaultPlaceholder = this.editorTitle.getAttribute('placeholder') || 'Untitled Note';
-    if (!sourceText || sourceText.trim() === '') {
-        this.editorTitle.textContent = defaultPlaceholder;
-        this.editorTitle.classList.add('placeholder-active');
-        return;
-    }
-    try {
-        const prompt = `Génère un titre français très concis d'une seule ligne (maximum 10-12 mots) pour le texte suivant. Ce titre sera utilisé comme nom de fichier ou titre de document. Priorise les noms, les lieux ou les sujets principaux. Évite les phrases introductives comme "Titre :". Texte :\n\n"${sourceText}"`;
-        const response: GenerateContentResponse = await this.genAI.models.generateContent({ model: MODEL_NAME, contents: [{text: prompt}] });
-        const textFromApi: string = response.text as string; // Cast to string
-        let title = textFromApi.trim();
-        if (title) {
-            title = title.replace(/^["']|["']$/g, '');
-            title = title.replace(/\.$/, '');
-            this.editorTitle.textContent = title;
-            this.editorTitle.classList.remove('placeholder-active');
-        } else {
-            const fallbackTitle = this.currentNote ? `Note (${new Date(this.currentNote.timestamp).toLocaleDateString('fr-FR')})` : defaultPlaceholder;
-            this.editorTitle.textContent = fallbackTitle;
-            this.editorTitle.classList.add('placeholder-active');
-        }
-    } catch (error) {
-        console.error('Error generating document title:', error);
-        const fallbackTitle = this.currentNote ? `Note (${new Date(this.currentNote.timestamp).toLocaleDateString('fr-FR')})` : defaultPlaceholder;
-        this.editorTitle.textContent = fallbackTitle;
-        this.editorTitle.classList.add('placeholder-active');
-    }
-  }
-
-  private createNewNote(sourceType?: 'audio' | 'pdf'): void {
-    if (this.isRecording) {
-      this.stopRecording(false).finally(() => this.resetNoteState(sourceType));
-      return;
-    }
-    if (this.isProcessingFile) { console.warn("Creating new note while a file is processing."); }
-    this.resetNoteState(sourceType);
-  }
-
-  private resetNoteState(sourceType?: 'audio' | 'pdf'): void {
-     if (this.maxDurationTimeoutId) {
-        clearTimeout(this.maxDurationTimeoutId);
-        this.maxDurationTimeoutId = null;
-    }
-    this.stopLiveDisplay();
-    if (this.stream) {
-        this.stream.getTracks().forEach(track => track.stop());
-        this.stream = null;
-    }
-    if (this.audioContext && this.audioContext.state !== 'closed') {
-        this.audioContext.close().catch(e => console.warn("Error closing audio context on new note:", e));
-        this.audioContext = null;
-    }
-    this.activeRecordingMaxDurationMs = null;
-    this.activeRecordingOriginalMinutesSetting = null;
-
-    this.currentNote = {
-      id: `note_${Date.now()}`,
-      rawTranscription: '',
-      polishedNote: '',
-      summary: '',
-      timestamp: Date.now(),
-      sourceType: sourceType,
-      audioBlob: undefined,
-      audioMimeType: undefined,
-    };
-
-    this.updateRawTranscriptionDisplay('');
-    this.updateSummaryEditorDisplay('');
-    this.updatePolishedNoteDisplay();
-
-    if (this.editorTitle) {
-      const placeholder = this.editorTitle.getAttribute('placeholder') || 'Untitled Note';
-      this.editorTitle.textContent = placeholder;
-      this.editorTitle.classList.add('placeholder-active');
-    }
-    if (!this.isProcessingFile && !this.isRecording) {
-        this.recordingStatus.textContent = this.getCurrentBaseStatus();
-    }
-  }
-  
-  private getCurrentBaseStatus(): string {
-    if (this.isRecording) {
-        const mins = this.activeRecordingOriginalMinutesSetting || this.userDefinedMaxRecordingMinutes;
-        return `Enregistrement en cours... (max ${mins} minutes)`;
-    }
-    if (this.isProcessingFile) { return 'Traitement du fichier en cours...'; }
-    return 'Prêt à enregistrer ou téléverser.';
-  }
-
-  private setButtonsDisabled(disabled: boolean): void {
-    this.recordButton.disabled = disabled;
-    this.uploadAudioButton.disabled = disabled;
-    this.uploadPdfButton.disabled = disabled;
-    this.newButton.disabled = disabled;
-    this.refreshAllButton.disabled = disabled;
-    this.refreshNoteFromSummaryButton.disabled = disabled;
-    this.saveSummaryButton.disabled = disabled;
-    this.saveAllButton.disabled = disabled;
-    this.setDurationButton.disabled = disabled;
-    this.durationInput.disabled = disabled;
-  }
-
-  private async handleRefreshAllFromRawText(): Promise<void> {
-    if (!this.currentNote) {
-        this.displayTemporaryStatus('Aucune note active à actualiser.', this.getCurrentBaseStatus());
-        return;
-    }
-    const rawTextFromEditor = this.rawTranscription.textContent?.trim() === this.rawTranscription.getAttribute('placeholder')?.trim()
-                            ? ''
-                            : this.rawTranscription.textContent || '';
-
-    if (!rawTextFromEditor && this.currentNote.sourceType !== 'pdf') {
-        this.displayTemporaryStatus('Aucun texte brut à traiter.', this.getCurrentBaseStatus());
-        return;
-    }
-    
-    this.isProcessingFile = true;
-    this.setButtonsDisabled(true);
-    this.recordingStatus.textContent = 'Actualisation de tous les contenus...';
-
-    this.currentNote.rawTranscription = rawTextFromEditor;
-
-    try {
-        if (this.currentNote.sourceType === 'pdf') {
-            this.recordingStatus.textContent = 'Actualisation du résumé pour le PDF...';
-            const summary = await this.generateSummaryLLM(this.currentNote.rawTranscription);
-            this.currentNote.summary = summary;
-            this.updateSummaryEditorDisplay(summary);
-            this.currentNote.polishedNote = "La note détaillée pour les PDF est contextuelle. Le texte intégral extrait du PDF est dans l'onglet 'Brut' et le résumé est ci-dessus (ou dans l'onglet 'Résumé').";
-            this.updatePolishedNoteDisplay();
-        } else {
-            this.recordingStatus.textContent = 'Actualisation du résumé...';
-            const summary = await this.generateSummaryLLM(this.currentNote.rawTranscription);
-            this.currentNote.summary = summary;
-            this.updateSummaryEditorDisplay(summary);
-
-            this.recordingStatus.textContent = 'Actualisation de la note détaillée...';
-            const polishedNote = await this.generatePolishedNoteLLM(this.currentNote.rawTranscription, this.currentNote.summary);
-            this.currentNote.polishedNote = polishedNote;
-            this.updatePolishedNoteDisplay();
-        }
-
-        this.recordingStatus.textContent = 'Actualisation du titre du document...';
-        await this.generateAndSetDocumentTitleLLM(this.currentNote.rawTranscription);
-        this.recordingStatus.textContent = 'Actualisation terminée.';
-    } catch (error) {
-        console.error('Error during refresh all:', error);
-        this.recordingStatus.textContent = 'Erreur lors de l\'actualisation.';
-    } finally {
-        this.isProcessingFile = false;
-        this.setButtonsDisabled(false);
-        setTimeout(() => {
-             if (this.recordingStatus.textContent === 'Actualisation terminée.' || this.recordingStatus.textContent === 'Erreur lors de l\'actualisation.') {
-                this.recordingStatus.textContent = this.getCurrentBaseStatus();
-             }
-        }, 3000);
-    }
-}
-
-private async handleRefreshDetailedNoteFromSummary(): Promise<void> {
-    if (!this.currentNote) {
-        this.displayTemporaryStatus('Aucune note active à actualiser.', this.getCurrentBaseStatus());
-        return;
-    }
-    if (this.currentNote.sourceType === 'pdf') {
-        this.displayTemporaryStatus("Cette fonction est optimisée pour les notes audio. Pour les PDF, modifiez le résumé et utilisez 'Tout actualiser'.", this.getCurrentBaseStatus(), 5000);
-        return;
-    }
-
-    const summaryTextFromEditor = this.summaryEditor.textContent?.trim() === this.summaryEditor.getAttribute('placeholder')?.trim()
-                                ? ''
-                                : this.summaryEditor.textContent || '';
-
-    if (!summaryTextFromEditor) {
-        this.displayTemporaryStatus('Aucun résumé à utiliser pour actualiser la note détaillée.', this.getCurrentBaseStatus());
-        return;
-    }
-    if (!this.currentNote.rawTranscription) {
-        this.displayTemporaryStatus('Le texte brut original est manquant pour actualiser la note détaillée.', this.getCurrentBaseStatus());
-        return;
-    }
-
-    this.isProcessingFile = true;
-    this.setButtonsDisabled(true);
-    this.recordingStatus.textContent = 'Actualisation de la note détaillée à partir du résumé...';
-
-    this.currentNote.summary = summaryTextFromEditor;
-
-    try {
-        const polishedNote = await this.generatePolishedNoteLLM(this.currentNote.rawTranscription, this.currentNote.summary);
-        this.currentNote.polishedNote = polishedNote;
-        this.updatePolishedNoteDisplay();
-        this.recordingStatus.textContent = 'Note détaillée actualisée.';
-    } catch (error) {
-        console.error('Error refreshing polished note from summary:', error);
-        this.recordingStatus.textContent = 'Erreur lors de l\'actualisation de la note détaillée.';
-    } finally {
-        this.isProcessingFile = false;
-        this.setButtonsDisabled(false);
-         setTimeout(() => {
-             if (this.recordingStatus.textContent === 'Note détaillée actualisée.' || this.recordingStatus.textContent === 'Erreur lors de l\'actualisation de la note détaillée.') {
-                this.recordingStatus.textContent = this.getCurrentBaseStatus();
-             }
-        }, 3000);
-    }
-}
-
-
-  private async copySummaryToClipboard(): Promise<void> {
-    const summaryText = this.currentNote?.summary || '';
-    if (!summaryText || summaryText.trim() === '' || summaryText.trim() === this.summaryEditor.getAttribute('placeholder')?.trim()) {
-      this.displayTemporaryStatus('Aucun résumé à copier.', this.getCurrentBaseStatus());
-      return;
-    }
-    if (!navigator.clipboard) {
-      this.displayTemporaryStatus('La copie dans le presse-papiers n\'est pas supportée par ce navigateur.', this.getCurrentBaseStatus(), 5000);
-      return;
-    }
-    this.recordingStatus.textContent = "Copie du résumé...";
-    try {
-      await navigator.clipboard.writeText(summaryText);
-      this.displayTemporaryStatus("Résumé copié dans le presse-papiers !", this.getCurrentBaseStatus(), 5000);
-    } catch (error) {
-      console.error("Erreur lors de la copie du résumé:", error);
-      this.displayTemporaryStatus("Échec de la copie du résumé. Veuillez réessayer.", this.getCurrentBaseStatus(), 5000);
-    }
-  }
-
-  private async copyRawTranscriptionToClipboard(): Promise<void> {
-    const rawText = this.currentNote?.rawTranscription || '';
-    if (!rawText || rawText.trim() === '' || rawText.trim() === this.rawTranscription.getAttribute('placeholder')?.trim()) {
-      this.displayTemporaryStatus('Aucune transcription brute à copier.', this.getCurrentBaseStatus());
-      return;
-    }
-    if (!navigator.clipboard) {
-      this.displayTemporaryStatus('La copie dans le presse-papiers n\'est pas supportée par ce navigateur.', this.getCurrentBaseStatus(), 5000);
-      return;
-    }
-    this.recordingStatus.textContent = "Copie de la transcription brute...";
-    try {
-      await navigator.clipboard.writeText(rawText);
-      this.displayTemporaryStatus("Transcription brute copiée dans le presse-papiers !", this.getCurrentBaseStatus(), 5000);
-    } catch (error) {
-      console.error("Erreur lors de la copie de la transcription brute:", error);
-      this.displayTemporaryStatus("Échec de la copie de la transcription brute. Veuillez réessayer.", this.getCurrentBaseStatus(), 5000);
-    }
-  }
-
-  private sanitizeFilename(filename: string): string {
-    let sanitized = filename.replace(/\s+/g, '_');
-    sanitized = sanitized.replace(/[\\/:*?"<>|#%&{}]/g, '');
-    sanitized = sanitized.replace(/__+/g, '_');
-    sanitized = sanitized.replace(/^_+|_+$/g, '');
-    const maxLength = 200;
-    if (sanitized.length > maxLength) {
-        sanitized = sanitized.substring(0, maxLength);
-    }
-    return sanitized || 'Sans_Titre';
-  }
-
-  private saveSummaryToFile(): void {
-    const summaryContent = this.currentNote?.summary || '';
-     if (!summaryContent || summaryContent.trim() === '' || summaryContent.trim() === this.summaryEditor.getAttribute('placeholder')?.trim()) {
-      this.displayTemporaryStatus('Aucun résumé à enregistrer.', this.getCurrentBaseStatus());
-      return;
-    }
-    this.recordingStatus.textContent = "Enregistrement du résumé...";
-    let noteTitle = this.editorTitle.textContent?.trim();
-    const placeholderTitle = this.editorTitle.getAttribute('placeholder') || 'Untitled Note';
-    if (!noteTitle || noteTitle === placeholderTitle || noteTitle.toLocaleLowerCase().includes('untitled') || noteTitle.toLocaleLowerCase().includes('sans titre')) {
-        const dateStr = new Date(this.currentNote!.timestamp).toLocaleDateString('fr-FR').replace(/\//g, '-');
-        noteTitle = this.currentNote!.sourceType === 'pdf' ? `Resume_PDF_${dateStr}` : `Note_Vocale_${dateStr}`;
-    }
-    const sanitizedTitle = this.sanitizeFilename(noteTitle);
-    const filename = `${sanitizedTitle}_Résumé.md`;
-    try {
-      const blob = new Blob([summaryContent], { type: 'text/markdown;charset=utf-8' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(link.href);
-      this.displayTemporaryStatus(`Résumé enregistré : ${filename}`, this.getCurrentBaseStatus(), 5000);
-    } catch (error) {
-      console.error("Erreur lors de l'enregistrement du fichier :", error);
-      this.displayTemporaryStatus("Erreur lors de l'enregistrement du fichier.", this.getCurrentBaseStatus(), 5000);
-    }
-  }
-
-  private getAudioFileExtension(mimeType?: string): string {
-    if (!mimeType) return 'bin';
-    if (mimeType.startsWith('audio/')) {
-        const subtype = mimeType.substring('audio/'.length);
-        if (subtype === 'webm') return 'webm';
-        if (subtype === 'mpeg') return 'mp3';
-        if (subtype === 'wav' || subtype === 'wave' || subtype === 'x-wav') return 'wav';
-        if (subtype === 'ogg') return 'ogg';
-        if (subtype === 'aac') return 'aac';
-        if (subtype === 'mp4') return 'm4a';
-        if (subtype.match(/^[a-zA-Z0-9]+$/)) return subtype;
-    }
-    return 'bin';
-  }
-
-  private generateTimestampedNameForZip(): string {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    return `Note_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.zip`;
-  }
-
-  private async saveAllPackage(): Promise<void> {
-    if (!this.currentNote) {
-      this.displayTemporaryStatus('Aucune note active à sauvegarder.', this.getCurrentBaseStatus());
-      return;
-    }
-
-    const { audioBlob, audioMimeType, rawTranscription, summary } = this.currentNote;
-    const rawTranscriptionText = rawTranscription?.trim() || '';
-    const summaryText = summary?.trim() || '';
-
-    if (!audioBlob && !rawTranscriptionText && !summaryText) {
-      this.displayTemporaryStatus('Aucun contenu à sauvegarder dans le package.', this.getCurrentBaseStatus());
-      return;
-    }
-
-    this.isProcessingFile = true;
-    this.setButtonsDisabled(true);
-    this.recordingStatus.textContent = 'Préparation du package...';
-
-    try {
-      const zip = new JSZip();
-
-      if (audioBlob) {
-        const audioExtension = this.getAudioFileExtension(audioMimeType);
-        zip.file(`audio.${audioExtension}`, audioBlob);
-      }
-
-      if (rawTranscriptionText) {
-        zip.file('transcription_brute.txt', rawTranscriptionText);
-      }
-
-      if (summaryText) {
-        zip.file('resume.md', summaryText);
-      }
-
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const filename = this.generateTimestampedNameForZip();
-
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(zipBlob);
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(link.href);
-
-      this.displayTemporaryStatus(`Package sauvegardé : ${filename}`, this.getCurrentBaseStatus(), 5000);
-
-    } catch (error) {
-      console.error("Erreur lors de la création ou sauvegarde du package ZIP :", error);
-      this.displayTemporaryStatus("Erreur lors de la création du package.", this.getCurrentBaseStatus(), 5000);
-    } finally {
-      this.isProcessingFile = false;
-      this.setButtonsDisabled(false);
-      if (!this.recordingStatus.textContent?.includes('Erreur') && !this.recordingStatus.textContent?.includes('Package sauvegardé')) {
-           this.recordingStatus.textContent = this.getCurrentBaseStatus();
-      }
-    }
-  }
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  new VoiceNotesApp();
-  document.querySelectorAll<HTMLElement>('[contenteditable="true"][placeholder]').forEach((el) => {
-      const placeholder = el.getAttribute('placeholder')!;
-      function updatePlaceholderState() {
-        const currentText = el.textContent?.trim();
-        if (currentText === '' || currentText === placeholder) {
-          if (currentText === '') { el.textContent = placeholder; }
-          el.classList.add('placeholder-active');
-        } else {
-          el.classList.remove('placeholder-active');
-        }
-      }
-      updatePlaceholderState();
-      el.addEventListener('focus', function () {
-        if (this.textContent?.trim() === placeholder) {
-          this.textContent = '';
-          this.classList.remove('placeholder-active');
-        }
-      });
-      el.addEventListener('blur', function () { updatePlaceholderState(); });
+  private setupFileUploads() {
+    // Audio upload
+    const uploadAudioButton = document.getElementById('uploadAudioButton') as HTMLButtonElement;
+    const audioFileUpload = document.getElementById('audioFileUpload') as HTMLInputElement;
+
+    uploadAudioButton.addEventListener('click', () => {
+      audioFileUpload.click();
     });
-});
 
-export {};
+    audioFileUpload.addEventListener('change', async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        await this.processUploadedAudio(file);
+      }
+    });
+
+    // PDF upload
+    const uploadPdfButton = document.getElementById('uploadPdfButton') as HTMLButtonElement;
+    const pdfFileUpload = document.getElementById('pdfFileUpload') as HTMLInputElement;
+
+    uploadPdfButton.addEventListener('click', () => {
+      pdfFileUpload.click();
+    });
+
+    pdfFileUpload.addEventListener('change', async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        await this.processPdfFile(file);
+      }
+    });
+  }
+
+  private async processUploadedAudio(file: File) {
+    if (!this.currentUser) return;
+
+    // Create new session if none exists
+    if (!this.currentSession) {
+      await this.createNewSession();
+    }
+
+    try {
+      // Convert to base64 for transcription
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64Audio = (reader.result as string).split(',')[1];
+        await this.transcribeAudio(base64Audio);
+      };
+      reader.readAsDataURL(file);
+
+    } catch (error) {
+      console.error('Error processing uploaded audio:', error);
+      alert('Erreur lors du traitement du fichier audio');
+    }
+  }
+
+  private async processPdfFile(file: File) {
+    // Implementation for PDF processing would go here
+    // This would extract text from PDF and process it similar to transcription
+    console.log('PDF processing not implemented yet');
+  }
+
+  private setupCopyAndSaveButtons() {
+    // Copy buttons
+    const copyRawButton = document.getElementById('copyRawTranscriptionButton') as HTMLButtonElement;
+    const copySummaryButton = document.getElementById('copySummaryButton') as HTMLButtonElement;
+    const copyDetailedButton = document.getElementById('copyDetailedNoteButton') as HTMLButtonElement;
+
+    copyRawButton.addEventListener('click', () => {
+      const content = document.getElementById('rawTranscription') as HTMLElement;
+      this.copyToClipboard(content.textContent || '');
+    });
+
+    copySummaryButton.addEventListener('click', () => {
+      const content = document.getElementById('summaryEditor') as HTMLElement;
+      this.copyToClipboard(content.textContent || '');
+    });
+
+    copyDetailedButton.addEventListener('click', () => {
+      const content = document.getElementById('polishedNote') as HTMLElement;
+      this.copyToClipboard(content.textContent || '');
+    });
+
+    // Save buttons
+    const saveSummaryButton = document.getElementById('saveSummaryButton') as HTMLButtonElement;
+    const saveDetailedButton = document.getElementById('saveDetailedNoteButton') as HTMLButtonElement;
+    const saveAllButton = document.getElementById('saveAllButton') as HTMLButtonElement;
+
+    saveSummaryButton.addEventListener('click', () => {
+      const content = document.getElementById('summaryEditor') as HTMLElement;
+      const title = (document.querySelector('.editor-title') as HTMLElement).textContent || 'summary';
+      this.downloadText(content.textContent || '', `${title}-summary.txt`);
+    });
+
+    saveDetailedButton.addEventListener('click', () => {
+      const content = document.getElementById('polishedNote') as HTMLElement;
+      const title = (document.querySelector('.editor-title') as HTMLElement).textContent || 'note';
+      this.downloadText(content.textContent || '', `${title}-detailed.txt`);
+    });
+
+    saveAllButton.addEventListener('click', () => {
+      this.downloadAllContent();
+    });
+
+    // Refresh buttons
+    const refreshAllButton = document.getElementById('refreshAllButton') as HTMLButtonElement;
+    const refreshNoteButton = document.getElementById('refreshNoteFromSummaryButton') as HTMLButtonElement;
+
+    refreshAllButton.addEventListener('click', async () => {
+      const rawContent = (document.getElementById('rawTranscription') as HTMLElement).textContent || '';
+      if (rawContent.trim()) {
+        await this.generateSummaryAndNote(rawContent);
+      }
+    });
+
+    refreshNoteButton.addEventListener('click', async () => {
+      const summaryContent = (document.getElementById('summaryEditor') as HTMLElement).textContent || '';
+      if (summaryContent.trim()) {
+        await this.generateDetailedNoteFromSummary(summaryContent);
+      }
+    });
+  }
+
+  private async generateDetailedNoteFromSummary(summary: string) {
+    if (!this.currentSession) return;
+
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) return;
+
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+      const result = await model.generateContent([
+        `Développe ce résumé en une note détaillée et bien structurée en français. Ajoute des détails pertinents, des exemples et une structure logique avec des titres et sous-titres. Utilise le format Markdown.
+
+Résumé à développer:
+${summary}`
+      ]);
+
+      const detailedNote = result.response.text();
+      const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+      polishedNote.innerHTML = marked(detailedNote) as string;
+
+      // Update database
+      await DatabaseService.updateSession(this.currentSession.id, {
+        detailed_note: polishedNote.innerHTML
+      });
+
+      this.updatePlaceholders();
+
+    } catch (error) {
+      console.error('Error generating detailed note from summary:', error);
+    }
+  }
+
+  private copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text).then(() => {
+      // Could add a toast notification here
+      console.log('Copied to clipboard');
+    }).catch(err => {
+      console.error('Failed to copy:', err);
+    });
+  }
+
+  private downloadText(content: string, filename: string) {
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  private async downloadAllContent() {
+    if (!this.currentSession) return;
+
+    const zip = new JSZip();
+    const title = (document.querySelector('.editor-title') as HTMLElement).textContent || 'session';
+    
+    // Add text files
+    const rawContent = (document.getElementById('rawTranscription') as HTMLElement).textContent || '';
+    const summaryContent = (document.getElementById('summaryEditor') as HTMLElement).textContent || '';
+    const detailedContent = (document.getElementById('polishedNote') as HTMLElement).textContent || '';
+
+    zip.file(`${title}-raw.txt`, rawContent);
+    zip.file(`${title}-summary.txt`, summaryContent);
+    zip.file(`${title}-detailed.txt`, detailedContent);
+
+    // Add audio file if available
+    if (this.currentSession.audio_file_path) {
+      try {
+        const audioUrl = await StorageService.getAudioFileUrl(this.currentSession.audio_file_path);
+        if (audioUrl) {
+          const response = await fetch(audioUrl);
+          const audioBlob = await response.blob();
+          zip.file(`${title}-audio.wav`, audioBlob);
+        }
+      } catch (error) {
+        console.error('Error adding audio to zip:', error);
+      }
+    }
+
+    // Generate and download zip
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title}-complete.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  private clearAllContent() {
+    const titleElement = document.querySelector('.editor-title') as HTMLElement;
+    const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+    const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+    const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
+
+    titleElement.textContent = 'Untitled Note';
+    summaryEditor.innerHTML = '';
+    polishedNote.innerHTML = '';
+    rawTranscription.innerHTML = '';
+
+    this.updatePlaceholders();
+  }
+
+  private updatePlaceholders() {
+    const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+    const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+    const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
+
+    // Update placeholder visibility based on content
+    [summaryEditor, polishedNote, rawTranscription].forEach(element => {
+      if (element.textContent?.trim()) {
+        element.classList.remove('placeholder-active');
+      } else {
+        element.classList.add('placeholder-active');
+      }
+    });
+  }
+}
+
+// Initialize the app
+document.addEventListener('DOMContentLoaded', () => {
+  new DictationApp();
+});
