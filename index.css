@@ -834,20 +834,20 @@ body.light-mode .record-button.recording .record-button-inner { color: white; }
   .record-button { width: 64px; height: 64px; }
 }
 
-@media (max-width: 480px) { /* Adjust breakpoint as needed for very small screens */
-    .recording-controls {
-        gap: 8px;
-    }
-    .action-button { width: 40px; height: 40px; font-size: 15px; }
-    #durationInput { width: 45px; height: 40px; font-size: 13px; }
-    .record-button { width: 60px; height: 60px; }
-    .live-recording-timer { font-size: 22px; }
-    
-    .app-logo {
-      font-size: 24px;
-    }
-    
-    .app-title {
-      font-size: 20px;
-    }
+@media (max-width: 480px) { 
+  .recording-controls {
+    gap: 8px;
+  }
+  .action-button { width: 40px; height: 40px; font-size: 15px; }
+  #durationInput { width: 45px; height: 40px; font-size: 13px; }
+  .record-button { width: 60px; height: 60px; }
+  .live-recording-timer { font-size: 22px; }
+  
+  .app-logo {
+    font-size: 24px;
+  }
+  
+  .app-title {
+    font-size: 20px;
+  }
 }
