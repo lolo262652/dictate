@@ -842,7 +842,6 @@ body.light-mode .record-button.recording .record-button-inner { color: white; }
     #durationInput { width: 45px; height: 40px; font-size: 13px; }
     .record-button { width: 60px; height: 60px; }
     .live-recording-timer { font-size: 22px; }
-}
     
     .app-logo {
       font-size: 24px;
