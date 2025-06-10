@@ -92,7 +92,8 @@
             <div
               id="polishedNote"
               class="note-content"
-              placeholder="La note détaillée (lecture seule) apparaîtra ici..."
+              contenteditable="true"
+              placeholder="La note détaillée éditable apparaîtra ici..."
             ></div>
             <div
               id="rawTranscription"
@@ -161,6 +162,14 @@
             
             <button class="action-button" id="saveSummaryButton" title="Enregistrer le résumé (depuis l'onglet Résumé)">
                 <i class="fas fa-download"></i>
+            </button>
+
+            <button class="action-button" id="copyDetailedNoteButton" title="Copier la note détaillée">
+                <i class="fas fa-clipboard"></i>
+            </button>
+
+            <button class="action-button" id="saveDetailedNoteButton" title="Enregistrer la note détaillée">
+                <i class="fas fa-file-download"></i>
             </button>
 
             <button class="action-button" id="saveAllButton" title="Sauvegarder tout (audio, transcription, résumé)">
