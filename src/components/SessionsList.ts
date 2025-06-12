@@ -7,10 +7,12 @@ export class SessionsList {
   private filteredSessions: DictationSession[] = [];
   private onSessionSelect: (session: DictationSession) => void;
   private searchTerm: string = '';
+  private deleteModal: HTMLElement | null = null;
 
   constructor(onSessionSelect: (session: DictationSession) => void) {
     this.onSessionSelect = onSessionSelect;
     this.container = this.createContainer();
+    this.createDeleteModal();
   }
 
   private createContainer(): HTMLElement {
@@ -65,6 +67,119 @@ export class SessionsList {
     });
 
     return container;
+  }
+
+  private createDeleteModal(): void {
+    this.deleteModal = document.createElement('div');
+    this.deleteModal.className = 'delete-confirmation-modal';
+    this.deleteModal.innerHTML = `
+      <div class="delete-confirmation-content">
+        <div class="delete-confirmation-icon">
+          <i class="fas fa-exclamation-triangle"></i>
+        </div>
+        <h3 class="delete-confirmation-title">Supprimer l'enregistrement</h3>
+        <p class="delete-confirmation-message" id="deleteMessage">
+          Êtes-vous sûr de vouloir supprimer cet enregistrement ? Cette action est irréversible.
+        </p>
+        <div class="delete-confirmation-actions">
+          <button class="delete-confirmation-btn cancel" id="deleteCancelBtn">Annuler</button>
+          <button class="delete-confirmation-btn confirm" id="deleteConfirmBtn">Supprimer</button>
+        </div>
+      </div>
+    `;
+
+    // Add to body but keep hidden
+    document.body.appendChild(this.deleteModal);
+
+    // Add event listeners once
+    const cancelBtn = this.deleteModal.querySelector('#deleteCancelBtn') as HTMLButtonElement;
+    const confirmBtn = this.deleteModal.querySelector('#deleteConfirmBtn') as HTMLButtonElement;
+
+    cancelBtn.addEventListener('click', () => this.hideDeleteModal());
+    confirmBtn.addEventListener('click', () => this.executeDelete());
+
+    // Close on overlay click
+    this.deleteModal.addEventListener('click', (e) => {
+      if (e.target === this.deleteModal) {
+        this.hideDeleteModal();
+      }
+    });
+  }
+
+  private currentDeleteData: {
+    session: DictationSession;
+    sessionItem: HTMLElement;
+    button: HTMLButtonElement;
+  } | null = null;
+
+  private showDeleteModal(session: DictationSession, sessionItem: HTMLElement, button: HTMLButtonElement): void {
+    this.currentDeleteData = { session, sessionItem, button };
+    
+    const message = this.deleteModal!.querySelector('#deleteMessage') as HTMLElement;
+    message.textContent = `Êtes-vous sûr de vouloir supprimer "${session.title}" ? Cette action est irréversible.`;
+    
+    // Reset button states
+    const confirmBtn = this.deleteModal!.querySelector('#deleteConfirmBtn') as HTMLButtonElement;
+    const cancelBtn = this.deleteModal!.querySelector('#deleteCancelBtn') as HTMLButtonElement;
+    
+    confirmBtn.innerHTML = 'Supprimer';
+    confirmBtn.disabled = false;
+    cancelBtn.disabled = false;
+    
+    // Show modal
+    this.deleteModal!.style.display = 'flex';
+    setTimeout(() => {
+      this.deleteModal!.classList.add('visible');
+    }, 10);
+  }
+
+  private hideDeleteModal(): void {
+    this.deleteModal!.classList.remove('visible');
+    setTimeout(() => {
+      this.deleteModal!.style.display = 'none';
+      this.currentDeleteData = null;
+    }, 300);
+  }
+
+  private async executeDelete(): Promise<void> {
+    if (!this.currentDeleteData) return;
+
+    const { session, sessionItem, button } = this.currentDeleteData;
+    const confirmBtn = this.deleteModal!.querySelector('#deleteConfirmBtn') as HTMLButtonElement;
+    const cancelBtn = this.deleteModal!.querySelector('#deleteCancelBtn') as HTMLButtonElement;
+
+    // Show loading state
+    confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Suppression...';
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+
+    try {
+      // Add deleting animation to button
+      button.classList.add('deleting');
+      
+      const success = await DatabaseService.deleteSession(session.id);
+      
+      if (success) {
+        // Add success animation to item
+        sessionItem.classList.add('deleting');
+        
+        // Wait for animation to complete
+        setTimeout(() => {
+          // Remove the session from local arrays
+          this.sessions = this.sessions.filter(s => s.id !== session.id);
+          this.filteredSessions = this.filteredSessions.filter(s => s.id !== session.id);
+          // Re-render the sessions list
+          this.updateSearchUI();
+          this.hideDeleteModal();
+        }, 600);
+      } else {
+        throw new Error('Failed to delete session');
+      }
+    } catch (error) {
+      console.error('Error deleting session:', error);
+      this.showDeleteError(sessionItem, button);
+      this.hideDeleteModal();
+    }
   }
 
   async loadSessions() {
@@ -188,7 +303,7 @@ export class SessionsList {
       if (action === 'load') {
         this.onSessionSelect(session);
       } else if (action === 'delete') {
-        await this.showDeleteConfirmation(session, sessionItem, button);
+        this.showDeleteModal(session, sessionItem, button);
       }
     } catch (error) {
       console.error('Error handling session action:', error);
@@ -196,98 +311,6 @@ export class SessionsList {
         this.showDeleteError(sessionItem, button);
       }
     }
-  }
-
-  private async showDeleteConfirmation(session: DictationSession, sessionItem: HTMLElement, button: HTMLButtonElement) {
-    return new Promise<void>((resolve, reject) => {
-      // Create modal
-      const modal = document.createElement('div');
-      modal.className = 'delete-confirmation-modal';
-      modal.innerHTML = `
-        <div class="delete-confirmation-content">
-          <div class="delete-confirmation-icon">
-            <i class="fas fa-exclamation-triangle"></i>
-          </div>
-          <h3 class="delete-confirmation-title">Supprimer l'enregistrement</h3>
-          <p class="delete-confirmation-message">
-            Êtes-vous sûr de vouloir supprimer "${session.title}" ? Cette action est irréversible.
-          </p>
-          <div class="delete-confirmation-actions">
-            <button class="delete-confirmation-btn cancel">Annuler</button>
-            <button class="delete-confirmation-btn confirm">Supprimer</button>
-          </div>
-        </div>
-      `;
-
-      document.body.appendChild(modal);
-
-      // Show modal with animation
-      setTimeout(() => {
-        modal.classList.add('visible');
-      }, 10);
-
-      const cancelBtn = modal.querySelector('.cancel') as HTMLButtonElement;
-      const confirmBtn = modal.querySelector('.confirm') as HTMLButtonElement;
-
-      const closeModal = () => {
-        modal.classList.remove('visible');
-        setTimeout(() => {
-          if (modal.parentNode) {
-            modal.parentNode.removeChild(modal);
-          }
-        }, 300);
-      };
-
-      cancelBtn.addEventListener('click', () => {
-        closeModal();
-        resolve();
-      });
-
-      confirmBtn.addEventListener('click', async () => {
-        // Show loading state
-        confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Suppression...';
-        confirmBtn.disabled = true;
-        cancelBtn.disabled = true;
-
-        try {
-          // Add deleting animation to button
-          button.classList.add('deleting');
-          
-          const success = await DatabaseService.deleteSession(session.id);
-          
-          if (success) {
-            // Add success animation to item
-            sessionItem.classList.add('deleting');
-            
-            // Wait for animation to complete
-            setTimeout(() => {
-              // Remove the session from local arrays
-              this.sessions = this.sessions.filter(s => s.id !== session.id);
-              this.filteredSessions = this.filteredSessions.filter(s => s.id !== session.id);
-              // Re-render the sessions list
-              this.updateSearchUI();
-              closeModal();
-              resolve();
-            }, 600);
-          } else {
-            throw new Error('Failed to delete session');
-          }
-        } catch (error) {
-          console.error('Error deleting session:', error);
-          this.showDeleteError(sessionItem, button);
-          closeModal();
-          reject(error);
-        }
-      });
-
-      // Close on overlay click
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-          closeModal();
-          resolve();
-        }
-      });
-    });
   }
 
   private showDeleteError(sessionItem: HTMLElement, button: HTMLButtonElement) {

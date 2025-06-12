@@ -8,12 +8,14 @@ export class PdfList {
   private filteredDocuments: PdfDocument[] = [];
   private pdfViewer: PdfViewer;
   private searchTerm: string = '';
+  private deleteModal: HTMLElement | null = null;
 
   constructor() {
     this.pdfViewer = new PdfViewer(() => {
       // Callback when PDF viewer is closed
     });
     this.container = this.createContainer();
+    this.createDeleteModal();
   }
 
   private createContainer(): HTMLElement {
@@ -35,6 +37,119 @@ export class PdfList {
     refreshBtn.addEventListener('click', () => this.loadDocuments());
 
     return container;
+  }
+
+  private createDeleteModal(): void {
+    this.deleteModal = document.createElement('div');
+    this.deleteModal.className = 'delete-confirmation-modal';
+    this.deleteModal.innerHTML = `
+      <div class="delete-confirmation-content">
+        <div class="delete-confirmation-icon">
+          <i class="fas fa-file-pdf"></i>
+        </div>
+        <h3 class="delete-confirmation-title">Supprimer le document PDF</h3>
+        <p class="delete-confirmation-message" id="pdfDeleteMessage">
+          Êtes-vous sûr de vouloir supprimer ce document ? Cette action est irréversible.
+        </p>
+        <div class="delete-confirmation-actions">
+          <button class="delete-confirmation-btn cancel" id="pdfDeleteCancelBtn">Annuler</button>
+          <button class="delete-confirmation-btn confirm" id="pdfDeleteConfirmBtn">Supprimer</button>
+        </div>
+      </div>
+    `;
+
+    // Add to body but keep hidden
+    document.body.appendChild(this.deleteModal);
+
+    // Add event listeners once
+    const cancelBtn = this.deleteModal.querySelector('#pdfDeleteCancelBtn') as HTMLButtonElement;
+    const confirmBtn = this.deleteModal.querySelector('#pdfDeleteConfirmBtn') as HTMLButtonElement;
+
+    cancelBtn.addEventListener('click', () => this.hideDeleteModal());
+    confirmBtn.addEventListener('click', () => this.executeDelete());
+
+    // Close on overlay click
+    this.deleteModal.addEventListener('click', (e) => {
+      if (e.target === this.deleteModal) {
+        this.hideDeleteModal();
+      }
+    });
+  }
+
+  private currentDeleteData: {
+    document: PdfDocument;
+    pdfItem: HTMLElement;
+    button: HTMLButtonElement;
+  } | null = null;
+
+  private showDeleteModal(document: PdfDocument, pdfItem: HTMLElement, button: HTMLButtonElement): void {
+    this.currentDeleteData = { document, pdfItem, button };
+    
+    const message = this.deleteModal!.querySelector('#pdfDeleteMessage') as HTMLElement;
+    message.textContent = `Êtes-vous sûr de vouloir supprimer "${document.title}" ? Cette action est irréversible.`;
+    
+    // Reset button states
+    const confirmBtn = this.deleteModal!.querySelector('#pdfDeleteConfirmBtn') as HTMLButtonElement;
+    const cancelBtn = this.deleteModal!.querySelector('#pdfDeleteCancelBtn') as HTMLButtonElement;
+    
+    confirmBtn.innerHTML = 'Supprimer';
+    confirmBtn.disabled = false;
+    cancelBtn.disabled = false;
+    
+    // Show modal
+    this.deleteModal!.style.display = 'flex';
+    setTimeout(() => {
+      this.deleteModal!.classList.add('visible');
+    }, 10);
+  }
+
+  private hideDeleteModal(): void {
+    this.deleteModal!.classList.remove('visible');
+    setTimeout(() => {
+      this.deleteModal!.style.display = 'none';
+      this.currentDeleteData = null;
+    }, 300);
+  }
+
+  private async executeDelete(): Promise<void> {
+    if (!this.currentDeleteData) return;
+
+    const { document, pdfItem, button } = this.currentDeleteData;
+    const confirmBtn = this.deleteModal!.querySelector('#pdfDeleteConfirmBtn') as HTMLButtonElement;
+    const cancelBtn = this.deleteModal!.querySelector('#pdfDeleteCancelBtn') as HTMLButtonElement;
+
+    // Show loading state
+    confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Suppression...';
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+
+    try {
+      // Add deleting animation to button
+      button.classList.add('deleting');
+      
+      const success = await PdfService.deletePdfDocument(document.id);
+      
+      if (success) {
+        // Add success animation to item
+        pdfItem.classList.add('deleting');
+        
+        // Wait for animation to complete
+        setTimeout(() => {
+          // Remove the document from local arrays
+          this.documents = this.documents.filter(d => d.id !== document.id);
+          this.filteredDocuments = this.filteredDocuments.filter(d => d.id !== document.id);
+          // Re-render the documents list
+          this.renderDocuments();
+          this.hideDeleteModal();
+        }, 600);
+      } else {
+        throw new Error('Failed to delete document');
+      }
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      this.showDeleteError(pdfItem, button);
+      this.hideDeleteModal();
+    }
   }
 
   async loadDocuments() {
@@ -133,100 +248,8 @@ export class PdfList {
     if (action === 'view') {
       await this.pdfViewer.show(document);
     } else if (action === 'delete') {
-      await this.showDeleteConfirmation(document, pdfItem, button);
+      this.showDeleteModal(document, pdfItem, button);
     }
-  }
-
-  private async showDeleteConfirmation(document: PdfDocument, pdfItem: HTMLElement, button: HTMLButtonElement) {
-    return new Promise<void>((resolve, reject) => {
-      // Create modal
-      const modal = document.createElement('div');
-      modal.className = 'delete-confirmation-modal';
-      modal.innerHTML = `
-        <div class="delete-confirmation-content">
-          <div class="delete-confirmation-icon">
-            <i class="fas fa-file-pdf"></i>
-          </div>
-          <h3 class="delete-confirmation-title">Supprimer le document PDF</h3>
-          <p class="delete-confirmation-message">
-            Êtes-vous sûr de vouloir supprimer "${document.title}" ? Cette action est irréversible.
-          </p>
-          <div class="delete-confirmation-actions">
-            <button class="delete-confirmation-btn cancel">Annuler</button>
-            <button class="delete-confirmation-btn confirm">Supprimer</button>
-          </div>
-        </div>
-      `;
-
-      document.body.appendChild(modal);
-
-      // Show modal with animation
-      setTimeout(() => {
-        modal.classList.add('visible');
-      }, 10);
-
-      const cancelBtn = modal.querySelector('.cancel') as HTMLButtonElement;
-      const confirmBtn = modal.querySelector('.confirm') as HTMLButtonElement;
-
-      const closeModal = () => {
-        modal.classList.remove('visible');
-        setTimeout(() => {
-          if (modal.parentNode) {
-            modal.parentNode.removeChild(modal);
-          }
-        }, 300);
-      };
-
-      cancelBtn.addEventListener('click', () => {
-        closeModal();
-        resolve();
-      });
-
-      confirmBtn.addEventListener('click', async () => {
-        // Show loading state
-        confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Suppression...';
-        confirmBtn.disabled = true;
-        cancelBtn.disabled = true;
-
-        try {
-          // Add deleting animation to button
-          button.classList.add('deleting');
-          
-          const success = await PdfService.deletePdfDocument(document.id);
-          
-          if (success) {
-            // Add success animation to item
-            pdfItem.classList.add('deleting');
-            
-            // Wait for animation to complete
-            setTimeout(() => {
-              // Remove the document from local arrays
-              this.documents = this.documents.filter(d => d.id !== document.id);
-              this.filteredDocuments = this.filteredDocuments.filter(d => d.id !== document.id);
-              // Re-render the documents list
-              this.renderDocuments();
-              closeModal();
-              resolve();
-            }, 600);
-          } else {
-            throw new Error('Failed to delete document');
-          }
-        } catch (error) {
-          console.error('Error deleting document:', error);
-          this.showDeleteError(pdfItem, button);
-          closeModal();
-          reject(error);
-        }
-      });
-
-      // Close on overlay click
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-          closeModal();
-          resolve();
-        }
-      });
-    });
   }
 
   private showDeleteError(pdfItem: HTMLElement, button: HTMLButtonElement) {
