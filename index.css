@@ -298,6 +298,151 @@ body.light-mode {
   color: var(--color-text);
 }
 
+/* PDF Quick Preview Styles */
+.pdf-quick-preview {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  margin: 8px 0;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  max-height: 0;
+  transition: max-height 0.3s ease, opacity 0.3s ease, transform 0.3s ease;
+}
+
+.pdf-quick-preview.visible {
+  opacity: 1;
+  transform: translateY(0);
+  max-height: 500px;
+}
+
+.pdf-quick-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.pdf-quick-preview-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 250px;
+}
+
+.pdf-quick-preview-close {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  transition: all 0.2s ease;
+}
+
+.pdf-quick-preview-close:hover {
+  background: var(--color-surface-active);
+  color: var(--color-text);
+}
+
+.pdf-quick-preview-content {
+  height: 300px;
+  position: relative;
+  overflow: hidden;
+}
+
+.pdf-quick-preview-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: white;
+}
+
+.pdf-quick-preview-loading,
+.pdf-quick-preview-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.pdf-quick-preview-loading i {
+  font-size: 24px;
+  color: var(--color-accent);
+}
+
+.pdf-quick-preview-error i {
+  font-size: 24px;
+  color: var(--color-recording);
+}
+
+.pdf-quick-preview-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.pdf-quick-preview-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.pdf-quick-preview-btn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+  border-color: var(--color-accent);
+}
+
+.pdf-quick-preview-btn i {
+  font-size: 10px;
+}
+
+/* Update PDF item styles for better interaction */
+.pdf-item-info {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.pdf-item-info:hover {
+  background: var(--color-surface-hover);
+  border-radius: 6px;
+}
+
+.pdf-action-btn.download-btn:hover {
+  background: var(--color-success);
+  color: white;
+}
+
 /* Delete Animation Styles */
 @keyframes deleteSlideOut {
   0% {
@@ -1916,6 +2061,14 @@ body.light-mode .record-button.recording .record-button-inner { color: white; }
   .transcription-progress-title {
     font-size: 18px;
   }
+
+  .pdf-quick-preview-content {
+    height: 250px;
+  }
+
+  .pdf-quick-preview-title {
+    max-width: 200px;
+  }
 }
 
 @media (max-width: 480px) { 
@@ -1967,5 +2120,23 @@ body.light-mode .record-button.recording .record-button-inner { color: white; }
 
   .transcription-progress-message {
     font-size: 13px;
+  }
+
+  .pdf-quick-preview-content {
+    height: 200px;
+  }
+
+  .pdf-quick-preview-title {
+    max-width: 150px;
+  }
+
+  .pdf-quick-preview-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .pdf-quick-preview-btn {
+    width: 100%;
+    justify-content: center;
   }
 }

@@ -208,7 +208,7 @@ export class PdfList {
           <div class="pdf-item-icon">
             <i class="fas fa-file-pdf"></i>
           </div>
-          <div class="pdf-item-info">
+          <div class="pdf-item-info" data-action="preview">
             <h5 class="pdf-item-title">${highlightedTitle}</h5>
             <div class="pdf-item-meta">
               <span class="pdf-item-date">${new Date(doc.created_at).toLocaleDateString('fr-FR')}</span>
@@ -217,8 +217,11 @@ export class PdfList {
             </div>
           </div>
           <div class="pdf-item-actions">
-            <button class="pdf-action-btn view-btn" data-action="view" title="Voir">
-              <i class="fas fa-eye"></i>
+            <button class="pdf-action-btn view-btn" data-action="view" title="Voir en plein écran">
+              <i class="fas fa-expand"></i>
+            </button>
+            <button class="pdf-action-btn download-btn" data-action="download" title="Télécharger">
+              <i class="fas fa-download"></i>
             </button>
             <button class="pdf-action-btn delete-btn" data-action="delete" title="Supprimer">
               <i class="fas fa-trash"></i>
@@ -235,20 +238,143 @@ export class PdfList {
   private async handleDocumentAction(e: Event) {
     const target = e.target as HTMLElement;
     const button = target.closest('.pdf-action-btn') as HTMLButtonElement;
+    const infoArea = target.closest('.pdf-item-info') as HTMLElement;
     
-    if (!button) return;
+    const pdfItem = (button || infoArea)?.closest('.pdf-item') as HTMLElement;
+    if (!pdfItem) return;
 
-    const pdfItem = button.closest('.pdf-item') as HTMLElement;
     const pdfId = pdfItem.dataset.pdfId!;
-    const action = button.dataset.action;
     const document = this.documents.find(d => d.id === pdfId);
-
     if (!document) return;
 
-    if (action === 'view') {
-      await this.pdfViewer.show(document);
-    } else if (action === 'delete') {
-      this.showDeleteModal(document, pdfItem, button);
+    let action: string;
+    
+    if (button) {
+      action = button.dataset.action!;
+    } else if (infoArea) {
+      action = 'preview';
+    } else {
+      return;
+    }
+
+    switch (action) {
+      case 'view':
+        await this.pdfViewer.show(document);
+        break;
+      case 'preview':
+        await this.showQuickPreview(document, pdfItem);
+        break;
+      case 'download':
+        await this.downloadPdf(document);
+        break;
+      case 'delete':
+        this.showDeleteModal(document, pdfItem, button);
+        break;
+    }
+  }
+
+  private async showQuickPreview(document: PdfDocument, pdfItem: HTMLElement) {
+    // Check if preview is already shown
+    const existingPreview = pdfItem.querySelector('.pdf-quick-preview');
+    if (existingPreview) {
+      existingPreview.remove();
+      return;
+    }
+
+    // Create preview container
+    const previewContainer = document.createElement('div');
+    previewContainer.className = 'pdf-quick-preview';
+    previewContainer.innerHTML = `
+      <div class="pdf-quick-preview-header">
+        <span class="pdf-quick-preview-title">Aperçu - ${document.title}</span>
+        <button class="pdf-quick-preview-close" title="Fermer">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="pdf-quick-preview-content">
+        <div class="pdf-quick-preview-loading">
+          <i class="fas fa-spinner fa-spin"></i>
+          <span>Chargement de l'aperçu...</span>
+        </div>
+      </div>
+      <div class="pdf-quick-preview-actions">
+        <button class="pdf-quick-preview-btn" data-action="fullscreen">
+          <i class="fas fa-expand"></i>
+          Plein écran
+        </button>
+        <button class="pdf-quick-preview-btn" data-action="download">
+          <i class="fas fa-download"></i>
+          Télécharger
+        </button>
+      </div>
+    `;
+
+    // Insert after the pdf item
+    pdfItem.insertAdjacentElement('afterend', previewContainer);
+
+    // Add event listeners
+    const closeBtn = previewContainer.querySelector('.pdf-quick-preview-close') as HTMLButtonElement;
+    closeBtn.addEventListener('click', () => previewContainer.remove());
+
+    const actionBtns = previewContainer.querySelectorAll('.pdf-quick-preview-btn');
+    actionBtns.forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const action = (e.currentTarget as HTMLElement).dataset.action;
+        if (action === 'fullscreen') {
+          await this.pdfViewer.show(document);
+          previewContainer.remove();
+        } else if (action === 'download') {
+          await this.downloadPdf(document);
+        }
+      });
+    });
+
+    // Load PDF preview
+    try {
+      const pdfUrl = await PdfService.getPdfFileUrl(document.file_path);
+      if (pdfUrl) {
+        const content = previewContainer.querySelector('.pdf-quick-preview-content') as HTMLElement;
+        content.innerHTML = `
+          <iframe 
+            src="${pdfUrl}#toolbar=0&navpanes=0&scrollbar=0" 
+            class="pdf-quick-preview-frame"
+            frameborder="0">
+          </iframe>
+        `;
+      } else {
+        throw new Error('Impossible de charger le PDF');
+      }
+    } catch (error) {
+      console.error('Error loading PDF preview:', error);
+      const content = previewContainer.querySelector('.pdf-quick-preview-content') as HTMLElement;
+      content.innerHTML = `
+        <div class="pdf-quick-preview-error">
+          <i class="fas fa-exclamation-triangle"></i>
+          <span>Erreur lors du chargement de l'aperçu</span>
+        </div>
+      `;
+    }
+
+    // Animate in
+    setTimeout(() => {
+      previewContainer.classList.add('visible');
+    }, 10);
+  }
+
+  private async downloadPdf(document: PdfDocument) {
+    try {
+      const pdfUrl = await PdfService.getPdfFileUrl(document.file_path);
+      if (pdfUrl) {
+        const a = document.createElement('a');
+        a.href = pdfUrl;
+        a.download = document.title;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      alert('Erreur lors du téléchargement du PDF');
     }
   }
 
