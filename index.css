@@ -118,6 +118,255 @@ body.light-mode {
   --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0,0,0,0.05);
 }
 
+/* Delete Animation Styles */
+@keyframes deleteSlideOut {
+  0% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    max-height: 100px;
+    margin-bottom: 8px;
+    padding: 12px;
+  }
+  50% {
+    opacity: 0.5;
+    transform: translateX(-20px) scale(0.95);
+    max-height: 100px;
+    margin-bottom: 8px;
+    padding: 12px;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-100px) scale(0.8);
+    max-height: 0;
+    margin-bottom: 0;
+    padding: 0;
+  }
+}
+
+@keyframes deleteButtonPulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 69, 58, 0.4);
+  }
+  50% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 8px rgba(255, 69, 58, 0.1);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 69, 58, 0);
+  }
+}
+
+@keyframes deleteSpinner {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes deleteShake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  10%, 30%, 50%, 70%, 90% {
+    transform: translateX(-2px);
+  }
+  20%, 40%, 60%, 80% {
+    transform: translateX(2px);
+  }
+}
+
+.session-item.deleting {
+  animation: deleteSlideOut 0.6s ease-in-out forwards;
+  pointer-events: none;
+}
+
+.pdf-item.deleting {
+  animation: deleteSlideOut 0.6s ease-in-out forwards;
+  pointer-events: none;
+}
+
+.session-action-btn.delete-btn.deleting {
+  animation: deleteButtonPulse 0.3s ease-in-out;
+  background: var(--color-recording) !important;
+  color: white !important;
+}
+
+.pdf-action-btn.delete-btn.deleting {
+  animation: deleteButtonPulse 0.3s ease-in-out;
+  background: var(--color-recording) !important;
+  color: white !important;
+}
+
+.session-action-btn.delete-btn.processing {
+  background: var(--color-recording) !important;
+  color: white !important;
+  animation: deleteSpinner 1s linear infinite;
+}
+
+.pdf-action-btn.delete-btn.processing {
+  background: var(--color-recording) !important;
+  color: white !important;
+  animation: deleteSpinner 1s linear infinite;
+}
+
+.session-item.delete-error {
+  animation: deleteShake 0.5s ease-in-out;
+  border-color: var(--color-recording);
+  background: rgba(255, 69, 58, 0.1);
+}
+
+.pdf-item.delete-error {
+  animation: deleteShake 0.5s ease-in-out;
+  border-color: var(--color-recording);
+  background: rgba(255, 69, 58, 0.1);
+}
+
+/* Modern Delete Confirmation Modal */
+.delete-confirmation-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.delete-confirmation-modal.visible {
+  opacity: 1;
+}
+
+.delete-confirmation-content {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 32px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  transform: scale(0.9) translateY(20px);
+  transition: transform 0.3s ease;
+}
+
+.delete-confirmation-modal.visible .delete-confirmation-content {
+  transform: scale(1) translateY(0);
+}
+
+.delete-confirmation-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 20px;
+  background: linear-gradient(135deg, var(--color-recording), #ff6b6b);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  color: white;
+  animation: deleteIconPulse 2s ease-in-out infinite;
+}
+
+@keyframes deleteIconPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 69, 58, 0.4);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 20px rgba(255, 69, 58, 0);
+  }
+}
+
+.delete-confirmation-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 12px;
+}
+
+.delete-confirmation-message {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+.delete-confirmation-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.delete-confirmation-btn {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 100px;
+}
+
+.delete-confirmation-btn.cancel {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.delete-confirmation-btn.cancel:hover {
+  background: var(--color-surface-hover);
+  transform: translateY(-1px);
+}
+
+.delete-confirmation-btn.confirm {
+  background: linear-gradient(135deg, var(--color-recording), #ff6b6b);
+  color: white;
+}
+
+.delete-confirmation-btn.confirm:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 69, 58, 0.3);
+}
+
+.delete-confirmation-btn.confirm:active {
+  transform: translateY(0);
+}
+
+/* Success Animation */
+@keyframes deleteSuccess {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(0);
+    opacity: 0;
+  }
+}
+
+.delete-success {
+  animation: deleteSuccess 0.5s ease-in-out forwards;
+}
+
 /* Auth Modal Styles */
 .auth-modal {
   position: fixed;
@@ -425,11 +674,13 @@ body.light-mode {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  transition: background-color var(--transition-fast);
+  transition: background-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .session-item:hover {
   background: var(--color-surface-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
 }
 
 .session-item.hidden {
@@ -489,6 +740,7 @@ body.light-mode {
 .session-action-btn:hover {
   background: var(--color-surface-hover);
   color: var(--color-text);
+  transform: scale(1.1);
 }
 
 .session-action-btn.delete-btn:hover {
@@ -550,11 +802,13 @@ body.light-mode {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  transition: background-color var(--transition-fast);
+  transition: background-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .pdf-item:hover {
   background: var(--color-surface-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
 }
 
 .pdf-item.hidden {
@@ -627,6 +881,7 @@ body.light-mode {
 .pdf-action-btn:hover {
   background: var(--color-surface-hover);
   color: var(--color-text);
+  transform: scale(1.1);
 }
 
 .pdf-action-btn.view-btn:hover {

@@ -133,27 +133,121 @@ export class PdfList {
     if (action === 'view') {
       await this.pdfViewer.show(document);
     } else if (action === 'delete') {
-      if (confirm('Êtes-vous sûr de vouloir supprimer ce document PDF ?')) {
-        // Disable the button to prevent multiple clicks
-        button.disabled = true;
-        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-        
-        const success = await PdfService.deletePdfDocument(pdfId);
-        
-        if (success) {
-          // Remove the document from local arrays
-          this.documents = this.documents.filter(d => d.id !== pdfId);
-          this.filteredDocuments = this.filteredDocuments.filter(d => d.id !== pdfId);
-          // Re-render the documents list
-          this.renderDocuments();
-        } else {
-          alert('Erreur lors de la suppression du document');
-          // Re-enable the button
-          button.disabled = false;
-          button.innerHTML = '<i class="fas fa-trash"></i>';
-        }
-      }
+      await this.showDeleteConfirmation(document, pdfItem, button);
     }
+  }
+
+  private async showDeleteConfirmation(document: PdfDocument, pdfItem: HTMLElement, button: HTMLButtonElement) {
+    return new Promise<void>((resolve, reject) => {
+      // Create modal
+      const modal = document.createElement('div');
+      modal.className = 'delete-confirmation-modal';
+      modal.innerHTML = `
+        <div class="delete-confirmation-content">
+          <div class="delete-confirmation-icon">
+            <i class="fas fa-file-pdf"></i>
+          </div>
+          <h3 class="delete-confirmation-title">Supprimer le document PDF</h3>
+          <p class="delete-confirmation-message">
+            Êtes-vous sûr de vouloir supprimer "${document.title}" ? Cette action est irréversible.
+          </p>
+          <div class="delete-confirmation-actions">
+            <button class="delete-confirmation-btn cancel">Annuler</button>
+            <button class="delete-confirmation-btn confirm">Supprimer</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Show modal with animation
+      setTimeout(() => {
+        modal.classList.add('visible');
+      }, 10);
+
+      const cancelBtn = modal.querySelector('.cancel') as HTMLButtonElement;
+      const confirmBtn = modal.querySelector('.confirm') as HTMLButtonElement;
+
+      const closeModal = () => {
+        modal.classList.remove('visible');
+        setTimeout(() => {
+          if (modal.parentNode) {
+            modal.parentNode.removeChild(modal);
+          }
+        }, 300);
+      };
+
+      cancelBtn.addEventListener('click', () => {
+        closeModal();
+        resolve();
+      });
+
+      confirmBtn.addEventListener('click', async () => {
+        // Show loading state
+        confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Suppression...';
+        confirmBtn.disabled = true;
+        cancelBtn.disabled = true;
+
+        try {
+          // Add deleting animation to button
+          button.classList.add('deleting');
+          
+          const success = await PdfService.deletePdfDocument(document.id);
+          
+          if (success) {
+            // Add success animation to item
+            pdfItem.classList.add('deleting');
+            
+            // Wait for animation to complete
+            setTimeout(() => {
+              // Remove the document from local arrays
+              this.documents = this.documents.filter(d => d.id !== document.id);
+              this.filteredDocuments = this.filteredDocuments.filter(d => d.id !== document.id);
+              // Re-render the documents list
+              this.renderDocuments();
+              closeModal();
+              resolve();
+            }, 600);
+          } else {
+            throw new Error('Failed to delete document');
+          }
+        } catch (error) {
+          console.error('Error deleting document:', error);
+          this.showDeleteError(pdfItem, button);
+          closeModal();
+          reject(error);
+        }
+      });
+
+      // Close on overlay click
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          closeModal();
+          resolve();
+        }
+      });
+    });
+  }
+
+  private showDeleteError(pdfItem: HTMLElement, button: HTMLButtonElement) {
+    // Remove any existing classes
+    button.classList.remove('deleting', 'processing');
+    pdfItem.classList.remove('deleting');
+    
+    // Add error animation
+    pdfItem.classList.add('delete-error');
+    
+    // Reset button
+    button.disabled = false;
+    button.innerHTML = '<i class="fas fa-trash"></i>';
+    
+    // Remove error class after animation
+    setTimeout(() => {
+      pdfItem.classList.remove('delete-error');
+    }, 500);
+    
+    // Show error message
+    alert('Erreur lors de la suppression du document');
   }
 
   private formatFileSize(bytes: number): string {
