@@ -3,76 +3,116 @@ import type { DictationSession } from './supabase';
 
 export class DatabaseService {
   static async createSession(session: Partial<DictationSession>): Promise<DictationSession | null> {
-    const { data, error } = await supabase
-      .from('dictation_sessions')
-      .insert([session])
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('dictation_sessions')
+        .insert([session])
+        .select()
+        .single();
 
-    if (error) {
+      if (error) {
+        console.error('Error creating session:', error);
+        return null;
+      }
+
+      return data;
+    } catch (error) {
       console.error('Error creating session:', error);
       return null;
     }
-
-    return data;
   }
 
   static async updateSession(id: string, updates: Partial<DictationSession>): Promise<DictationSession | null> {
-    const { data, error } = await supabase
-      .from('dictation_sessions')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('dictation_sessions')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single();
 
-    if (error) {
+      if (error) {
+        console.error('Error updating session:', error);
+        return null;
+      }
+
+      return data;
+    } catch (error) {
       console.error('Error updating session:', error);
       return null;
     }
-
-    return data;
   }
 
   static async getSession(id: string): Promise<DictationSession | null> {
-    const { data, error } = await supabase
-      .from('dictation_sessions')
-      .select('*')
-      .eq('id', id)
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('dictation_sessions')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-    if (error) {
+      if (error) {
+        console.error('Error fetching session:', error);
+        return null;
+      }
+
+      return data;
+    } catch (error) {
       console.error('Error fetching session:', error);
       return null;
     }
-
-    return data;
   }
 
   static async getUserSessions(): Promise<DictationSession[]> {
-    const { data, error } = await supabase
-      .from('dictation_sessions')
-      .select('*')
-      .order('created_at', { ascending: false });
+    try {
+      const { data, error } = await supabase
+        .from('dictation_sessions')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-    if (error) {
+      if (error) {
+        console.error('Error fetching user sessions:', error);
+        return [];
+      }
+
+      return data || [];
+    } catch (error) {
       console.error('Error fetching user sessions:', error);
       return [];
     }
-
-    return data || [];
   }
 
   static async deleteSession(id: string): Promise<boolean> {
-    const { error } = await supabase
-      .from('dictation_sessions')
-      .delete()
-      .eq('id', id);
+    try {
+      // First get the session to get the audio file path
+      const session = await this.getSession(id);
+      
+      // Delete the audio file from storage if it exists
+      if (session?.audio_file_path) {
+        try {
+          const { StorageService } = await import('./storage');
+          await StorageService.deleteAudioFile(session.audio_file_path);
+        } catch (storageError) {
+          console.warn('Error deleting audio file:', storageError);
+          // Continue with session deletion even if file deletion fails
+        }
+      }
 
-    if (error) {
+      // Delete the session from database
+      const { error } = await supabase
+        .from('dictation_sessions')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error deleting session:', error);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
       console.error('Error deleting session:', error);
       return false;
     }
-
-    return true;
   }
 }

@@ -36,8 +36,13 @@ export class SessionsList {
     const content = this.container.querySelector('#sessionsContent') as HTMLElement;
     content.innerHTML = '<div class="loading">Chargement...</div>';
 
-    this.sessions = await DatabaseService.getUserSessions();
-    this.renderSessions();
+    try {
+      this.sessions = await DatabaseService.getUserSessions();
+      this.renderSessions();
+    } catch (error) {
+      console.error('Error loading sessions:', error);
+      content.innerHTML = '<div class="no-sessions">Erreur lors du chargement des sessions</div>';
+    }
   }
 
   private renderSessions() {
@@ -85,12 +90,37 @@ export class SessionsList {
 
     if (!session) return;
 
-    if (action === 'load') {
-      this.onSessionSelect(session);
-    } else if (action === 'delete') {
-      if (confirm('Êtes-vous sûr de vouloir supprimer cet enregistrement ?')) {
-        await DatabaseService.deleteSession(sessionId);
-        await this.loadSessions();
+    try {
+      if (action === 'load') {
+        this.onSessionSelect(session);
+      } else if (action === 'delete') {
+        if (confirm('Êtes-vous sûr de vouloir supprimer cet enregistrement ?')) {
+          // Disable the button to prevent multiple clicks
+          button.disabled = true;
+          button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+          
+          const success = await DatabaseService.deleteSession(sessionId);
+          
+          if (success) {
+            // Remove the session from the local array
+            this.sessions = this.sessions.filter(s => s.id !== sessionId);
+            // Re-render the sessions list
+            this.renderSessions();
+          } else {
+            alert('Erreur lors de la suppression de la session');
+            // Re-enable the button
+            button.disabled = false;
+            button.innerHTML = '<i class="fas fa-trash"></i>';
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error handling session action:', error);
+      if (action === 'delete') {
+        alert('Erreur lors de la suppression de la session');
+        // Re-enable the button
+        button.disabled = false;
+        button.innerHTML = '<i class="fas fa-trash"></i>';
       }
     }
   }
