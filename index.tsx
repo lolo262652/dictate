@@ -35,7 +35,6 @@ class DictationApp {
   private currentAudioBlob: Blob | null = null;
   private audioPlayer: HTMLAudioElement | null = null;
   private playbackTimer: number | null = null;
-  private isProcessing = false;
 
   constructor() {
     this.authModal = new AuthModal();
@@ -77,6 +76,23 @@ class DictationApp {
     this.setupTabNavigation();
     this.setupAudioPlayer();
     this.setupSearchIntegration();
+  }
+
+  private async updatePdfPreviewButton() {
+    const previewButton = document.getElementById('previewPdfButton') as HTMLButtonElement;
+    if (!previewButton) return;
+
+    try {
+      const documents = await PdfService.getUserPdfDocuments();
+      if (documents.length > 0) {
+        previewButton.style.display = 'flex';
+      } else {
+        previewButton.style.display = 'none';
+      }
+    } catch (error) {
+      console.error('Error checking PDF documents:', error);
+      previewButton.style.display = 'none';
+    }
   }
 
   private setupSearchIntegration() {
@@ -290,8 +306,8 @@ ${transcription.substring(0, 1000)}...`
 
     // PDF Preview button
     const previewPdfButton = document.getElementById('previewPdfButton') as HTMLButtonElement;
-    previewPdfButton.addEventListener('click', () => {
-      this.showPdfPreviewModal();
+    previewPdfButton.addEventListener('click', async () => {
+      await this.showPdfPreviewModal();
     });
 
     // Auto-save on content changes
@@ -321,226 +337,246 @@ ${transcription.substring(0, 1000)}...`
     this.setupCopyAndSaveButtons();
   }
 
-  private async updatePdfPreviewButton() {
-    const previewButton = document.getElementById('previewPdfButton') as HTMLButtonElement;
-    
-    if (!this.currentUser) {
-      previewButton.style.display = 'none';
-      return;
-    }
-
-    // Check if user has any PDFs
-    const documents = await PdfService.getUserPdfDocuments();
-    if (documents.length > 0) {
-      previewButton.style.display = 'flex';
-    } else {
-      previewButton.style.display = 'none';
-    }
-  }
-
-  private showPdfPreviewModal() {
-    // Create a modal to show PDF list
-    const modal = document.createElement('div');
-    modal.className = 'pdf-viewer-modal pdf-viewer-visible';
-    modal.style.display = 'flex';
-    modal.innerHTML = `
-      <div class="pdf-viewer-overlay"></div>
-      <div class="pdf-viewer-content">
-        <div class="pdf-viewer-header">
-          <h3>Mes Documents PDF</h3>
-          <div class="pdf-viewer-controls">
-            <button class="action-button" id="closePdfListModal" title="Fermer">
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
-        </div>
-        <div class="pdf-viewer-body">
-          <div id="pdfListModalContent" style="width: 100%; padding: 20px; overflow-y: auto;">
-            <div class="loading">Chargement des documents...</div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(modal);
-
-    // Close button functionality
-    const closeBtn = modal.querySelector('#closePdfListModal') as HTMLButtonElement;
-    const overlay = modal.querySelector('.pdf-viewer-overlay') as HTMLElement;
-    
-    const closeModal = () => {
-      modal.classList.remove('pdf-viewer-visible');
-      setTimeout(() => {
-        if (modal.parentNode) {
-          modal.parentNode.removeChild(modal);
-        }
-      }, 300);
-    };
-
-    closeBtn.addEventListener('click', closeModal);
-    overlay.addEventListener('click', closeModal);
-
-    // Load PDF documents
-    this.loadPdfDocumentsInModal(modal);
-  }
-
-  private async loadPdfDocumentsInModal(modal: HTMLElement) {
-    const content = modal.querySelector('#pdfListModalContent') as HTMLElement;
-    
+  private async showPdfPreviewModal() {
     try {
       const documents = await PdfService.getUserPdfDocuments();
       
       if (documents.length === 0) {
-        content.innerHTML = `
-          <div style="text-align: center; color: var(--color-text-secondary); padding: 40px;">
-            <i class="fas fa-file-pdf" style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;"></i>
-            <p>Aucun document PDF trouvé</p>
-            <p style="font-size: 14px; margin-top: 8px;">Utilisez le bouton de téléversement PDF pour ajouter des documents.</p>
-          </div>
-        `;
+        alert('Aucun document PDF trouvé. Téléversez d\'abord un PDF.');
         return;
       }
 
-      content.innerHTML = documents.map(doc => `
-        <div class="pdf-item" style="margin-bottom: 12px; cursor: pointer;" data-pdf-id="${doc.id}">
-          <div class="pdf-item-icon">
+      // Create modal
+      const modal = document.createElement('div');
+      modal.className = 'delete-confirmation-modal pdf-preview-modal';
+      modal.innerHTML = `
+        <div class="delete-confirmation-content" style="max-width: 600px; max-height: 80vh; overflow-y: auto;">
+          <div class="delete-confirmation-icon" style="background: linear-gradient(135deg, var(--color-accent), var(--color-accent-alt));">
             <i class="fas fa-file-pdf"></i>
           </div>
-          <div class="pdf-item-info" style="flex: 1;">
-            <h5 class="pdf-item-title">${doc.title}</h5>
-            <div class="pdf-item-meta">
-              <span class="pdf-item-date">${new Date(doc.created_at).toLocaleDateString('fr-FR')}</span>
-              <span class="pdf-item-size">${this.formatFileSize(doc.file_size)}</span>
-              <span class="pdf-item-pages">${doc.page_count} pages</span>
-            </div>
+          <h3 class="delete-confirmation-title">Aperçu des Documents PDF</h3>
+          <p class="delete-confirmation-message">
+            Cliquez sur un document pour l'aperçu ou utilisez les actions.
+          </p>
+          <div class="pdf-preview-list" style="margin: 20px 0; max-height: 400px; overflow-y: auto;">
+            ${documents.map(doc => `
+              <div class="pdf-preview-item" data-pdf-id="${doc.id}" style="
+                display: flex;
+                align-items: center;
+                padding: 12px;
+                margin-bottom: 8px;
+                background: var(--color-surface);
+                border: 1px solid var(--color-border);
+                border-radius: 8px;
+                cursor: pointer;
+                transition: all 0.2s ease;
+              ">
+                <div style="
+                  width: 40px;
+                  height: 40px;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  background: var(--color-accent);
+                  color: white;
+                  border-radius: 8px;
+                  margin-right: 12px;
+                  font-size: 18px;
+                ">
+                  <i class="fas fa-file-pdf"></i>
+                </div>
+                <div style="flex: 1; min-width: 0;">
+                  <h5 style="
+                    font-size: 14px;
+                    font-weight: 500;
+                    color: var(--color-text);
+                    margin-bottom: 4px;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                  ">${doc.title}</h5>
+                  <div style="
+                    display: flex;
+                    gap: 8px;
+                    font-size: 12px;
+                    color: var(--color-text-secondary);
+                  ">
+                    <span>${new Date(doc.created_at).toLocaleDateString('fr-FR')}</span>
+                    <span>${this.formatFileSize(doc.file_size)}</span>
+                    <span>${doc.page_count} pages</span>
+                  </div>
+                </div>
+                <div style="display: flex; gap: 4px;">
+                  <button class="pdf-modal-action-btn" data-action="view" title="Voir en plein écran" style="
+                    width: 28px;
+                    height: 28px;
+                    border: none;
+                    border-radius: 6px;
+                    background: var(--color-surface);
+                    color: var(--color-text-secondary);
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 12px;
+                    transition: all 0.2s ease;
+                  ">
+                    <i class="fas fa-expand"></i>
+                  </button>
+                  <button class="pdf-modal-action-btn" data-action="download" title="Télécharger" style="
+                    width: 28px;
+                    height: 28px;
+                    border: none;
+                    border-radius: 6px;
+                    background: var(--color-surface);
+                    color: var(--color-text-secondary);
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 12px;
+                    transition: all 0.2s ease;
+                  ">
+                    <i class="fas fa-download"></i>
+                  </button>
+                </div>
+              </div>
+            `).join('')}
           </div>
-          <div class="pdf-item-actions">
-            <button class="pdf-action-btn view-btn" data-action="view" title="Voir en plein écran">
-              <i class="fas fa-expand"></i>
-            </button>
-            <button class="pdf-action-btn download-btn" data-action="download" title="Télécharger">
-              <i class="fas fa-download"></i>
-            </button>
+          <div class="delete-confirmation-actions">
+            <button class="delete-confirmation-btn cancel" id="pdfPreviewCloseBtn">Fermer</button>
           </div>
         </div>
-      `).join('');
+      `;
 
-      // Add event listeners for PDF actions
-      content.addEventListener('click', async (e) => {
+      document.body.appendChild(modal);
+
+      // Show modal with animation
+      setTimeout(() => {
+        modal.classList.add('visible');
+      }, 10);
+
+      // Add event listeners
+      const closeBtn = modal.querySelector('#pdfPreviewCloseBtn') as HTMLButtonElement;
+      closeBtn.addEventListener('click', () => {
+        modal.classList.remove('visible');
+        setTimeout(() => {
+          if (modal.parentNode) {
+            modal.parentNode.removeChild(modal);
+          }
+        }, 300);
+      });
+
+      // Handle PDF item clicks and actions
+      modal.addEventListener('click', async (e) => {
         const target = e.target as HTMLElement;
-        const button = target.closest('.pdf-action-btn') as HTMLButtonElement;
-        const pdfItem = target.closest('.pdf-item') as HTMLElement;
+        
+        // Close on overlay click
+        if (target === modal) {
+          closeBtn.click();
+          return;
+        }
+
+        const actionBtn = target.closest('.pdf-modal-action-btn') as HTMLButtonElement;
+        const pdfItem = target.closest('.pdf-preview-item') as HTMLElement;
         
         if (!pdfItem) return;
-        
+
         const pdfId = pdfItem.dataset.pdfId!;
         const document = documents.find(d => d.id === pdfId);
         if (!document) return;
 
-        if (button) {
-          const action = button.dataset.action;
+        if (actionBtn) {
+          // Handle action buttons
+          e.stopPropagation();
+          const action = actionBtn.dataset.action;
+          
           if (action === 'view') {
-            // Close the modal first
-            modal.classList.remove('pdf-viewer-visible');
-            setTimeout(() => {
-              if (modal.parentNode) {
-                modal.parentNode.removeChild(modal);
-              }
-            }, 300);
-            // Then show the PDF viewer
             await this.pdfList.showPdfViewer(document);
+            closeBtn.click();
           } else if (action === 'download') {
             await this.downloadPdf(document);
           }
         } else {
-          // Clicked on the PDF item itself - show quick preview
-          await this.showPdfQuickPreviewInModal(document, pdfItem, modal);
+          // Handle item click for quick preview
+          await this.showQuickPdfPreview(document, pdfItem);
         }
       });
 
-    } catch (error) {
-      console.error('Error loading PDF documents:', error);
-      content.innerHTML = `
-        <div style="text-align: center; color: var(--color-recording); padding: 40px;">
-          <i class="fas fa-exclamation-triangle" style="font-size: 48px; margin-bottom: 16px;"></i>
-          <p>Erreur lors du chargement des documents</p>
-        </div>
+      // Add hover effects
+      const style = document.createElement('style');
+      style.textContent = `
+        .pdf-preview-item:hover {
+          background: var(--color-surface-hover) !important;
+          transform: translateY(-1px);
+          box-shadow: var(--shadow-sm);
+        }
+        .pdf-modal-action-btn:hover {
+          background: var(--color-surface-hover) !important;
+          color: var(--color-text) !important;
+          transform: scale(1.1);
+        }
+        .pdf-modal-action-btn[data-action="view"]:hover {
+          background: var(--color-accent) !important;
+          color: white !important;
+        }
+        .pdf-modal-action-btn[data-action="download"]:hover {
+          background: var(--color-success) !important;
+          color: white !important;
+        }
       `;
+      document.head.appendChild(style);
+
+    } catch (error) {
+      console.error('Error showing PDF preview modal:', error);
+      alert('Erreur lors du chargement des documents PDF');
     }
   }
 
-  private async showPdfQuickPreviewInModal(document: PdfDocument, pdfItem: HTMLElement, modal: HTMLElement) {
+  private async showQuickPdfPreview(document: PdfDocument, pdfItem: HTMLElement) {
     // Check if preview is already shown
-    const existingPreview = pdfItem.querySelector('.pdf-quick-preview');
+    const existingPreview = pdfItem.querySelector('.pdf-inline-preview');
     if (existingPreview) {
       existingPreview.remove();
       return;
     }
 
-    // Create preview container
+    // Create inline preview
     const previewContainer = document.createElement('div');
-    previewContainer.className = 'pdf-quick-preview';
+    previewContainer.className = 'pdf-inline-preview';
+    previewContainer.style.cssText = `
+      margin-top: 12px;
+      padding: 12px;
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      height: 200px;
+      position: relative;
+    `;
+
     previewContainer.innerHTML = `
-      <div class="pdf-quick-preview-header">
-        <span class="pdf-quick-preview-title">Aperçu - ${document.title}</span>
-        <button class="pdf-quick-preview-close" title="Fermer">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-      <div class="pdf-quick-preview-content">
-        <div class="pdf-quick-preview-loading">
-          <i class="fas fa-spinner fa-spin"></i>
-          <span>Chargement de l'aperçu...</span>
-        </div>
-      </div>
-      <div class="pdf-quick-preview-actions">
-        <button class="pdf-quick-preview-btn" data-action="fullscreen">
-          <i class="fas fa-expand"></i>
-          Plein écran
-        </button>
-        <button class="pdf-quick-preview-btn" data-action="download">
-          <i class="fas fa-download"></i>
-          Télécharger
-        </button>
+      <div style="
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: var(--color-text-secondary);
+        font-size: 14px;
+      ">
+        <i class="fas fa-spinner fa-spin" style="margin-right: 8px;"></i>
+        Chargement de l'aperçu...
       </div>
     `;
 
-    // Insert after the pdf item
-    pdfItem.insertAdjacentElement('afterend', previewContainer);
+    pdfItem.appendChild(previewContainer);
 
-    // Add event listeners
-    const closeBtn = previewContainer.querySelector('.pdf-quick-preview-close') as HTMLButtonElement;
-    closeBtn.addEventListener('click', () => previewContainer.remove());
-
-    const actionBtns = previewContainer.querySelectorAll('.pdf-quick-preview-btn');
-    actionBtns.forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        const action = (e.currentTarget as HTMLElement).dataset.action;
-        if (action === 'fullscreen') {
-          // Close the modal first
-          modal.classList.remove('pdf-viewer-visible');
-          setTimeout(() => {
-            if (modal.parentNode) {
-              modal.parentNode.removeChild(modal);
-            }
-          }, 300);
-          // Then show the PDF viewer
-          await this.pdfList.showPdfViewer(document);
-        } else if (action === 'download') {
-          await this.downloadPdf(document);
-        }
-      });
-    });
-
-    // Load PDF preview
     try {
       const pdfUrl = await PdfService.getPdfFileUrl(document.file_path);
       if (pdfUrl) {
-        const content = previewContainer.querySelector('.pdf-quick-preview-content') as HTMLElement;
-        content.innerHTML = `
+        previewContainer.innerHTML = `
           <iframe 
             src="${pdfUrl}#toolbar=0&navpanes=0&scrollbar=0" 
-            class="pdf-quick-preview-frame"
+            style="width: 100%; height: 100%; border: none; border-radius: 4px;"
             frameborder="0">
           </iframe>
         `;
@@ -549,19 +585,21 @@ ${transcription.substring(0, 1000)}...`
       }
     } catch (error) {
       console.error('Error loading PDF preview:', error);
-      const content = previewContainer.querySelector('.pdf-quick-preview-content') as HTMLElement;
-      content.innerHTML = `
-        <div class="pdf-quick-preview-error">
-          <i class="fas fa-exclamation-triangle"></i>
-          <span>Erreur lors du chargement de l'aperçu</span>
+      previewContainer.innerHTML = `
+        <div style="
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          height: 100%;
+          color: var(--color-recording);
+          font-size: 14px;
+        ">
+          <i class="fas fa-exclamation-triangle" style="margin-bottom: 8px; font-size: 20px;"></i>
+          <span>Erreur lors du chargement</span>
         </div>
       `;
     }
-
-    // Animate in
-    setTimeout(() => {
-      previewContainer.classList.add('visible');
-    }, 10);
   }
 
   private async downloadPdf(document: PdfDocument) {
@@ -611,7 +649,7 @@ ${transcription.substring(0, 1000)}...`
   }
 
   private async startRecording() {
-    if (!this.currentUser || this.isProcessing) return;
+    if (!this.currentUser) return;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -659,13 +697,12 @@ ${transcription.substring(0, 1000)}...`
   }
 
   private async processRecording(audioBlob: Blob) {
-    if (!this.currentUser || !this.currentSession || this.isProcessing) return;
-
-    this.isProcessing = true;
+    if (!this.currentUser || !this.currentSession) return;
 
     // Show progress indicator
     this.transcriptionProgress.show(() => {
-      this.isProcessing = false;
+      // Cancel callback - could implement cancellation logic here
+      console.log('Transcription cancelled by user');
     });
 
     try {
@@ -683,7 +720,7 @@ ${transcription.substring(0, 1000)}...`
       playButton.style.display = 'flex';
 
       // Step 2: Convert audio to base64 for transcription
-      this.transcriptionProgress.setStep(1, 'Préparation de la transcription...');
+      this.transcriptionProgress.setStep(1, 'Préparation pour la transcription...');
       
       const reader = new FileReader();
       reader.onload = async () => {
@@ -695,14 +732,19 @@ ${transcription.substring(0, 1000)}...`
     } catch (error) {
       console.error('Error processing recording:', error);
       this.transcriptionProgress.setError('Erreur lors du traitement de l\'enregistrement');
-      this.isProcessing = false;
+      setTimeout(() => {
+        this.transcriptionProgress.hide();
+      }, 3000);
     }
   }
 
   private async transcribeAudio(base64Audio: string, audioPath?: string | null) {
-    if (!this.currentSession || !this.isProcessing) return;
+    if (!this.currentSession) return;
 
     try {
+      // Step 2: Transcription
+      this.transcriptionProgress.setStep(1, 'Transcription en cours...');
+      
       // Get API key from environment variables
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
       if (!apiKey) {
@@ -711,9 +753,6 @@ ${transcription.substring(0, 1000)}...`
 
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-      // Step 2: Transcription
-      this.transcriptionProgress.setStep(1, 'Transcription en cours...');
 
       const result = await model.generateContent([
         "Transcris cet audio en français. Retourne uniquement le texte transcrit, sans commentaires additionnels.",
@@ -765,12 +804,14 @@ ${transcription.substring(0, 1000)}...`
     } catch (error) {
       console.error('Error transcribing audio:', error);
       this.transcriptionProgress.setError('Erreur lors de la transcription: ' + (error as Error).message);
-      this.isProcessing = false;
+      setTimeout(() => {
+        this.transcriptionProgress.hide();
+      }, 3000);
     }
   }
 
   private async generateSummaryAndNote(transcription: string) {
-    if (!this.currentSession || !this.isProcessing) return;
+    if (!this.currentSession) return;
 
     try {
       // Get API key from environment variables
@@ -782,7 +823,7 @@ ${transcription.substring(0, 1000)}...`
 
       // Step 4: Generate summary
       this.transcriptionProgress.setStep(3, 'Création du résumé...');
-
+      
       const summaryResult = await model.generateContent([
         `Crée un résumé concis et structuré de ce texte en français. Le résumé doit capturer les points clés et être facilement lisible. Utilise le format Markdown pour la structure.
 
@@ -796,7 +837,7 @@ ${transcription}`
 
       // Step 5: Generate detailed note
       this.transcriptionProgress.setStep(4, 'Rédaction de la note détaillée...');
-
+      
       const noteResult = await model.generateContent([
         `Transforme ce texte en une note détaillée et bien structurée en français. Organise le contenu de manière logique avec des titres, sous-titres et points clés. Utilise le format Markdown pour une présentation claire.
 
@@ -818,12 +859,13 @@ ${transcription}`
 
       // Show success
       this.transcriptionProgress.setSuccess('Traitement terminé avec succès !');
-      this.isProcessing = false;
 
     } catch (error) {
       console.error('Error generating summary and note:', error);
       this.transcriptionProgress.setError('Erreur lors de la génération du contenu');
-      this.isProcessing = false;
+      setTimeout(() => {
+        this.transcriptionProgress.hide();
+      }, 3000);
     }
   }
 
@@ -1164,19 +1206,12 @@ ${transcription}`
   }
 
   private async processUploadedAudio(file: File) {
-    if (!this.currentUser || this.isProcessing) return;
+    if (!this.currentUser) return;
 
     // Create new session if none exists
     if (!this.currentSession) {
       await this.createNewSession();
     }
-
-    this.isProcessing = true;
-
-    // Show progress indicator
-    this.transcriptionProgress.show(() => {
-      this.isProcessing = false;
-    });
 
     try {
       // Store the uploaded file as current audio blob
@@ -1185,9 +1220,6 @@ ${transcription}`
       // Show play button
       const playButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
       playButton.style.display = 'flex';
-
-      // Step 1: File ready
-      this.transcriptionProgress.setStep(0, 'Fichier audio chargé');
 
       // Convert to base64 for transcription
       const reader = new FileReader();
@@ -1199,19 +1231,16 @@ ${transcription}`
 
     } catch (error) {
       console.error('Error processing uploaded audio:', error);
-      this.transcriptionProgress.setError('Erreur lors du traitement du fichier audio');
-      this.isProcessing = false;
+      alert('Erreur lors du traitement du fichier audio');
     }
   }
 
   private async processPdfFile(file: File) {
-    if (!this.currentUser || this.isProcessing) return;
-
-    this.isProcessing = true;
+    if (!this.currentUser) return;
 
     // Show progress indicator
     this.transcriptionProgress.show(() => {
-      this.isProcessing = false;
+      console.log('PDF processing cancelled by user');
     });
 
     try {
@@ -1220,7 +1249,7 @@ ${transcription}`
       const extractedText = await PdfService.extractTextFromPdf(file);
       
       // Step 2: Upload PDF file
-      this.transcriptionProgress.setStep(1, 'Téléversement du PDF...');
+      this.transcriptionProgress.setStep(1, 'Téléversement du fichier PDF...');
       const filePath = await PdfService.uploadPdfFile(file, this.currentUser.id, this.currentSession?.id);
       
       if (!filePath) {
@@ -1248,10 +1277,8 @@ ${transcription}`
           const createdDocument = await PdfService.createPdfDocument(pdfDocument);
           
           if (createdDocument) {
-            // Refresh PDF list
+            // Refresh PDF list and update preview button
             this.pdfList.loadDocuments();
-            
-            // Update PDF preview button visibility
             this.updatePdfPreviewButton();
             
             // If we have a current session, process the extracted text
@@ -1289,13 +1316,14 @@ ${transcription}`
               await this.generateSummaryAndNote(extractedText);
             } else {
               this.transcriptionProgress.setSuccess('PDF téléversé avec succès !');
-              this.isProcessing = false;
             }
           }
         } catch (error) {
           console.error('Error processing PDF:', error);
           this.transcriptionProgress.setError('Erreur lors du traitement du PDF');
-          this.isProcessing = false;
+          setTimeout(() => {
+            this.transcriptionProgress.hide();
+          }, 3000);
         }
       };
       reader.readAsArrayBuffer(file);
@@ -1303,7 +1331,9 @@ ${transcription}`
     } catch (error) {
       console.error('Error processing PDF file:', error);
       this.transcriptionProgress.setError('Erreur lors du traitement du fichier PDF: ' + (error as Error).message);
-      this.isProcessing = false;
+      setTimeout(() => {
+        this.transcriptionProgress.hide();
+      }, 3000);
     }
   }
 
@@ -1354,38 +1384,22 @@ ${transcription}`
     const refreshNoteButton = document.getElementById('refreshNoteFromSummaryButton') as HTMLButtonElement;
 
     refreshAllButton.addEventListener('click', async () => {
-      if (this.isProcessing) return;
-      
       const rawContent = (document.getElementById('rawTranscription') as HTMLElement).textContent || '';
       if (rawContent.trim()) {
-        this.isProcessing = true;
-        this.transcriptionProgress.show(() => {
-          this.isProcessing = false;
-        });
-        
-        this.transcriptionProgress.setStep(2, 'Génération du titre...');
         await this.generateSummaryAndNote(rawContent);
       }
     });
 
     refreshNoteButton.addEventListener('click', async () => {
-      if (this.isProcessing) return;
-      
       const summaryContent = (document.getElementById('summaryEditor') as HTMLElement).textContent || '';
       if (summaryContent.trim()) {
-        this.isProcessing = true;
-        this.transcriptionProgress.show(() => {
-          this.isProcessing = false;
-        });
-        
-        this.transcriptionProgress.setStep(4, 'Génération de la note détaillée...');
         await this.generateDetailedNoteFromSummary(summaryContent);
       }
     });
   }
 
   private async generateDetailedNoteFromSummary(summary: string) {
-    if (!this.currentSession || !this.isProcessing) return;
+    if (!this.currentSession) return;
 
     try {
       // Get API key from environment variables
@@ -1412,13 +1426,9 @@ ${summary}`
       });
 
       this.updatePlaceholders();
-      this.transcriptionProgress.setSuccess('Note détaillée générée avec succès !');
-      this.isProcessing = false;
 
     } catch (error) {
       console.error('Error generating detailed note from summary:', error);
-      this.transcriptionProgress.setError('Erreur lors de la génération de la note détaillée');
-      this.isProcessing = false;
     }
   }
 
