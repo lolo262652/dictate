@@ -1,9 +1,11 @@
 import { AuthService } from './src/lib/auth';
 import { DatabaseService } from './src/lib/database';
 import { StorageService } from './src/lib/storage';
+import { PdfService } from './src/lib/pdf-service';
 import { AuthModal } from './src/components/AuthModal';
 import { SessionsList } from './src/components/SessionsList';
-import type { DictationSession } from './src/lib/supabase';
+import { PdfList } from './src/components/PdfList';
+import type { DictationSession, PdfDocument } from './src/lib/supabase';
 import type { User } from '@supabase/supabase-js';
 
 // Import existing functionality
@@ -16,6 +18,7 @@ class DictationApp {
   private currentSession: DictationSession | null = null;
   private authModal: AuthModal;
   private sessionsList: SessionsList;
+  private pdfList: PdfList;
   private isRecording = false;
   private mediaRecorder: MediaRecorder | null = null;
   private audioChunks: Blob[] = [];
@@ -34,6 +37,7 @@ class DictationApp {
   constructor() {
     this.authModal = new AuthModal();
     this.sessionsList = new SessionsList(this.loadSession.bind(this));
+    this.pdfList = new PdfList();
     this.initializeApp();
   }
 
@@ -45,6 +49,7 @@ class DictationApp {
         this.authModal.hide();
         this.showMainApp();
         this.sessionsList.loadSessions();
+        this.pdfList.loadDocuments();
       } else {
         this.authModal.show();
         this.hideMainApp();
@@ -57,6 +62,7 @@ class DictationApp {
       this.currentUser = user;
       this.showMainApp();
       this.sessionsList.loadSessions();
+      this.pdfList.loadDocuments();
     } else {
       this.authModal.show();
     }
@@ -69,7 +75,14 @@ class DictationApp {
   private showMainApp() {
     const mainApp = document.getElementById('mainApp') as HTMLElement;
     mainApp.style.display = 'flex';
+    
+    // Add sessions list
     document.body.appendChild(this.sessionsList.getElement());
+    
+    // Add PDF list to sessions list
+    const sessionsContent = this.sessionsList.getElement().querySelector('.sessions-content') as HTMLElement;
+    sessionsContent.appendChild(this.pdfList.getElement());
+    
     setTimeout(() => {
       mainApp.classList.add('app-entrance');
     }, 100);
@@ -762,9 +775,76 @@ ${transcription}`
   }
 
   private async processPdfFile(file: File) {
-    // Implementation for PDF processing would go here
-    // This would extract text from PDF and process it similar to transcription
-    console.log('PDF processing not implemented yet');
+    if (!this.currentUser) return;
+
+    try {
+      // Extract text from PDF
+      const extractedText = await PdfService.extractTextFromPdf(file);
+      
+      // Upload PDF file
+      const filePath = await PdfService.uploadPdfFile(file, this.currentUser.id, this.currentSession?.id);
+      
+      if (!filePath) {
+        throw new Error('Erreur lors du téléversement du fichier PDF');
+      }
+
+      // Get PDF info
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const typedarray = new Uint8Array(e.target?.result as ArrayBuffer);
+          const pdf = await (window as any).pdfjsLib.getDocument(typedarray).promise;
+          
+          // Create PDF document record
+          const pdfDocument: Partial<PdfDocument> = {
+            user_id: this.currentUser!.id,
+            session_id: this.currentSession?.id,
+            title: file.name,
+            file_path: filePath,
+            file_size: file.size,
+            page_count: pdf.numPages,
+            extracted_text: extractedText
+          };
+
+          const createdDocument = await PdfService.createPdfDocument(pdfDocument);
+          
+          if (createdDocument) {
+            // Refresh PDF list
+            this.pdfList.loadDocuments();
+            
+            // If we have a current session, process the extracted text
+            if (this.currentSession && extractedText.trim()) {
+              // Create new session if none exists
+              if (!this.currentSession) {
+                await this.createNewSession();
+              }
+
+              // Update raw transcription with extracted text
+              const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
+              rawTranscription.innerHTML = extractedText;
+
+              // Update session in database
+              await DatabaseService.updateSession(this.currentSession.id, {
+                raw_transcription: extractedText
+              });
+
+              // Generate summary and detailed note from PDF text
+              await this.generateSummaryAndNote(extractedText);
+            }
+            
+            alert('PDF téléversé et traité avec succès !');
+          }
+        } catch (error) {
+          console.error('Error processing PDF:', error);
+          alert('Erreur lors du traitement du PDF');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+
+    } catch (error) {
+      console.error('Error processing PDF file:', error);
+      alert('Erreur lors du traitement du fichier PDF: ' + (error as Error).message);
+    }
   }
 
   private setupCopyAndSaveButtons() {

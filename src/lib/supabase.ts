@@ -21,3 +21,16 @@ export type DictationSession = {
   created_at: string;
   updated_at: string;
 };
+
+export type PdfDocument = {
+  id: string;
+  session_id?: string;
+  user_id: string;
+  title: string;
+  file_path: string;
+  file_size: number;
+  page_count: number;
+  extracted_text: string;
+  created_at: string;
+  updated_at: string;
+};
