@@ -278,9 +278,10 @@ class DictationApp {
     if (!this.currentSession) return;
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      // Get API key from environment variables
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
       if (!apiKey) {
-        throw new Error('Clé API Gemini manquante');
+        throw new Error('Clé API Gemini manquante. Veuillez configurer VITE_GEMINI_API_KEY dans votre fichier .env');
       }
 
       const genAI = new GoogleGenerativeAI(apiKey);
@@ -319,7 +320,7 @@ class DictationApp {
 
     } catch (error) {
       console.error('Error transcribing audio:', error);
-      alert('Erreur lors de la transcription');
+      alert('Erreur lors de la transcription: ' + (error as Error).message);
     }
   }
 
@@ -327,7 +328,8 @@ class DictationApp {
     if (!this.currentSession) return;
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      // Get API key from environment variables
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
       if (!apiKey) return;
 
       const genAI = new GoogleGenerativeAI(apiKey);
@@ -703,7 +705,8 @@ ${transcription}`
     if (!this.currentSession) return;
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      // Get API key from environment variables
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
       if (!apiKey) return;
 
       const genAI = new GoogleGenerativeAI(apiKey);
