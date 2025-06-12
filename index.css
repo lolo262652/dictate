@@ -430,12 +430,55 @@ body.light-mode {
 /* Update PDF item styles for better interaction */
 .pdf-item-info {
   cursor: pointer;
-  transition: background-color 0.2s ease;
+  transition: all 0.2s ease;
+  border-radius: 6px;
+  padding: 4px 8px;
+  margin: -4px -8px;
+  position: relative;
 }
 
 .pdf-item-info:hover {
   background: var(--color-surface-hover);
-  border-radius: 6px;
+  transform: translateX(2px);
+}
+
+.pdf-item-info::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 0;
+  background: var(--color-accent);
+  transition: height 0.2s ease;
+  border-radius: 1px;
+}
+
+.pdf-item-info:hover::before {
+  height: 60%;
+}
+
+.pdf-item-info::after {
+  content: 'Cliquer pour aperçu';
+  position: absolute;
+  right: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--color-accent);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 10;
+}
+
+.pdf-item-info:hover::after {
+  opacity: 1;
 }
 
 .pdf-action-btn.download-btn:hover {
@@ -1151,11 +1194,6 @@ body.light-mode {
   border-radius: 8px;
   margin-right: 12px;
   font-size: 18px;
-}
-
-.pdf-item-info {
-  flex: 1;
-  min-width: 0;
 }
 
 .pdf-item-title {
