@@ -88,6 +88,7 @@
 
   --footer-height: 120px;
   --live-footer-height: 350px;
+  --playback-footer-height: 200px;
 }
 
 body.light-mode {
@@ -415,6 +416,126 @@ body.light-mode {
   font-size: 14px;
 }
 
+/* Audio Playback Controls */
+.audio-playback-controls {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+  animation: slideInUp 0.3s ease-out;
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.playback-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.playback-info span {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-primary);
+}
+
+#playbackTitle {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+#playbackTime {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.playback-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.playback-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.playback-btn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+  transform: scale(1.05);
+}
+
+.playback-btn.playing {
+  background: var(--color-accent);
+  color: white;
+}
+
+.audio-seeker {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-surface);
+  outline: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.audio-seeker::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+}
+
+.audio-seeker::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.audio-seeker::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  cursor: pointer;
+  border: none;
+  transition: transform var(--transition-fast);
+}
+
+.audio-seeker::-moz-range-thumb:hover {
+  transform: scale(1.2);
+}
+
 /* App Entrance Animation */
 .app-container {
   opacity: 0;
@@ -520,6 +641,10 @@ body {
 
 .main-content:has(> .recording-interface.is-live) {
   padding-bottom: var(--live-footer-height);
+}
+
+.main-content:has(> .recording-interface.is-playback) {
+  padding-bottom: var(--playback-footer-height);
 }
 
 .note-area {
@@ -726,8 +851,28 @@ body.light-mode .active-tab-indicator {
   padding-bottom: 20px;
 }
 
+.recording-interface.is-playback {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--playback-footer-height);
+  z-index: 1000;
+
+  background-color: var(--glass-recording-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid var(--glass-recording-border);
+  box-shadow: 0 -4px 20px var(--glass-shadow);
+
+  justify-content: flex-start;
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+
 .status-indicator { margin-bottom: 16px; }
 .recording-interface.is-live .status-indicator { display: none; }
+.recording-interface.is-playback .status-indicator { display: none; }
 .status-text { font-size: 14px; color: var(--color-text-tertiary); text-align: center; transition: color var(--transition-normal); font-family: var(--font-primary); }
 
 .live-recording-title,
@@ -796,6 +941,8 @@ body.light-mode .active-tab-indicator {
 
 .recording-interface.is-live .action-button { display: none; }
 .recording-interface.is-live .duration-control-group { display: none; }
+.recording-interface.is-playback .action-button { display: none; }
+.recording-interface.is-playback .duration-control-group { display: none; }
 
 .action-button:hover { color: var(--color-text); transform: translateY(-2px) scale(1.05); box-shadow: var(--shadow-md); background-color: var(--color-surface-hover); border-color: var(--glass-highlight); }
 
@@ -954,6 +1101,7 @@ body.light-mode .record-button.recording .record-button-inner { color: white; }
   
   .note-content-wrapper { padding: 0 20px 20px; }
   .recording-interface.is-live { padding-left: 15px; padding-right: 15px; }
+  .recording-interface.is-playback { padding-left: 15px; padding-right: 15px; }
   #liveWaveformCanvas { max-width: calc(100% - 30px); height: 60px; }
   .live-recording-timer { font-size: 26px; }
   

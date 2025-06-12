@@ -27,6 +27,9 @@ class DictationApp {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private animationId: number | null = null;
+  private currentAudioBlob: Blob | null = null;
+  private audioPlayer: HTMLAudioElement | null = null;
+  private playbackTimer: number | null = null;
 
   constructor() {
     this.authModal = new AuthModal();
@@ -60,6 +63,7 @@ class DictationApp {
 
     this.setupEventListeners();
     this.setupTabNavigation();
+    this.setupAudioPlayer();
   }
 
   private showMainApp() {
@@ -94,6 +98,14 @@ class DictationApp {
     summaryEditor.innerHTML = session.summary || '';
     polishedNote.innerHTML = session.detailed_note || '';
     rawTranscription.innerHTML = session.raw_transcription || '';
+
+    // Show play button if audio exists
+    const playButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
+    if (session.audio_file_path) {
+      playButton.style.display = 'flex';
+    } else {
+      playButton.style.display = 'none';
+    }
 
     // Update placeholders
     this.updatePlaceholders();
@@ -152,6 +164,12 @@ class DictationApp {
     newButton.addEventListener('click', async () => {
       await this.createNewSession();
       this.clearAllContent();
+    });
+
+    // Play recording button
+    const playRecordingButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
+    playRecordingButton.addEventListener('click', async () => {
+      await this.playCurrentRecording();
     });
 
     // Auto-save on content changes
@@ -221,6 +239,7 @@ class DictationApp {
 
       this.mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
+        this.currentAudioBlob = audioBlob;
         await this.processRecording(audioBlob);
         stream.getTracks().forEach(track => track.stop());
       };
@@ -259,6 +278,10 @@ class DictationApp {
         this.currentUser.id,
         this.currentSession.id
       );
+
+      // Show play button
+      const playButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
+      playButton.style.display = 'flex';
 
       // Convert audio to base64 for transcription
       const reader = new FileReader();
@@ -484,6 +507,103 @@ ${transcription}`
     }
   }
 
+  private setupAudioPlayer() {
+    this.audioPlayer = document.getElementById('audioPlayer') as HTMLAudioElement;
+    const playPauseBtn = document.getElementById('playPauseBtn') as HTMLButtonElement;
+    const stopPlaybackBtn = document.getElementById('stopPlaybackBtn') as HTMLButtonElement;
+    const audioSeeker = document.getElementById('audioSeeker') as HTMLInputElement;
+    const playbackTime = document.getElementById('playbackTime') as HTMLElement;
+
+    playPauseBtn.addEventListener('click', () => {
+      if (this.audioPlayer!.paused) {
+        this.audioPlayer!.play();
+        playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
+        playPauseBtn.classList.add('playing');
+      } else {
+        this.audioPlayer!.pause();
+        playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+        playPauseBtn.classList.remove('playing');
+      }
+    });
+
+    stopPlaybackBtn.addEventListener('click', () => {
+      this.audioPlayer!.pause();
+      this.audioPlayer!.currentTime = 0;
+      playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+      playPauseBtn.classList.remove('playing');
+      this.hideAudioPlayer();
+    });
+
+    audioSeeker.addEventListener('input', () => {
+      const seekTime = (parseFloat(audioSeeker.value) / 100) * this.audioPlayer!.duration;
+      this.audioPlayer!.currentTime = seekTime;
+    });
+
+    this.audioPlayer.addEventListener('timeupdate', () => {
+      if (this.audioPlayer!.duration) {
+        const progress = (this.audioPlayer!.currentTime / this.audioPlayer!.duration) * 100;
+        audioSeeker.value = progress.toString();
+        
+        const currentTime = this.formatTime(this.audioPlayer!.currentTime);
+        const duration = this.formatTime(this.audioPlayer!.duration);
+        playbackTime.textContent = `${currentTime} / ${duration}`;
+      }
+    });
+
+    this.audioPlayer.addEventListener('ended', () => {
+      playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+      playPauseBtn.classList.remove('playing');
+      audioSeeker.value = '0';
+      this.hideAudioPlayer();
+    });
+  }
+
+  private async playCurrentRecording() {
+    if (!this.currentSession || !this.currentSession.audio_file_path) {
+      // Try to play the current audio blob if available
+      if (this.currentAudioBlob) {
+        const audioUrl = URL.createObjectURL(this.currentAudioBlob);
+        this.audioPlayer!.src = audioUrl;
+        this.showAudioPlayer();
+        return;
+      }
+      return;
+    }
+
+    try {
+      const audioUrl = await StorageService.getAudioFileUrl(this.currentSession.audio_file_path);
+      if (audioUrl) {
+        this.audioPlayer!.src = audioUrl;
+        this.showAudioPlayer();
+      }
+    } catch (error) {
+      console.error('Error loading audio file:', error);
+      alert('Erreur lors du chargement du fichier audio');
+    }
+  }
+
+  private showAudioPlayer() {
+    const audioPlaybackControls = document.getElementById('audioPlaybackControls') as HTMLElement;
+    const recordingInterface = document.querySelector('.recording-interface') as HTMLElement;
+    
+    audioPlaybackControls.style.display = 'block';
+    recordingInterface.classList.add('is-playback');
+  }
+
+  private hideAudioPlayer() {
+    const audioPlaybackControls = document.getElementById('audioPlaybackControls') as HTMLElement;
+    const recordingInterface = document.querySelector('.recording-interface') as HTMLElement;
+    
+    audioPlaybackControls.style.display = 'none';
+    recordingInterface.classList.remove('is-playback');
+  }
+
+  private formatTime(seconds: number): string {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = Math.floor(seconds % 60);
+    return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+  }
+
   private setupTabNavigation() {
     const tabNav = document.querySelector(".tab-navigation") as HTMLElement;
     const tabButtons = tabNav.querySelectorAll(".tab-button");
@@ -620,6 +740,13 @@ ${transcription}`
     }
 
     try {
+      // Store the uploaded file as current audio blob
+      this.currentAudioBlob = file;
+      
+      // Show play button
+      const playButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
+      playButton.style.display = 'flex';
+
       // Convert to base64 for transcription
       const reader = new FileReader();
       reader.onload = async () => {
@@ -783,6 +910,9 @@ ${summary}`
       } catch (error) {
         console.error('Error adding audio to zip:', error);
       }
+    } else if (this.currentAudioBlob) {
+      // Add current audio blob if no stored file
+      zip.file(`${title}-audio.wav`, this.currentAudioBlob);
     }
 
     // Generate and download zip
@@ -802,11 +932,17 @@ ${summary}`
     const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
     const polishedNote = document.getElementById('polishedNote') as HTMLElement;
     const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
+    const playButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
 
     titleElement.textContent = 'Untitled Note';
     summaryEditor.innerHTML = '';
     polishedNote.innerHTML = '';
     rawTranscription.innerHTML = '';
+    playButton.style.display = 'none';
+
+    // Clear audio references
+    this.currentAudioBlob = null;
+    this.hideAudioPlayer();
 
     this.updatePlaceholders();
   }
