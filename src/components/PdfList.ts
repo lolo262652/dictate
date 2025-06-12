@@ -407,6 +407,11 @@ export class PdfList {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
+  // Public method to show PDF viewer (used by main app)
+  async showPdfViewer(document: PdfDocument) {
+    await this.pdfViewer.show(document);
+  }
+
   getElement(): HTMLElement {
     return this.container;
   }

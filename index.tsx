@@ -54,6 +54,7 @@ class DictationApp {
         this.showMainApp();
         this.sessionsList.loadSessions();
         this.pdfList.loadDocuments();
+        this.updatePdfPreviewButton();
       } else {
         this.authModal.show();
         this.hideMainApp();
@@ -67,6 +68,7 @@ class DictationApp {
       this.showMainApp();
       this.sessionsList.loadSessions();
       this.pdfList.loadDocuments();
+      this.updatePdfPreviewButton();
     } else {
       this.authModal.show();
     }
@@ -286,6 +288,12 @@ ${transcription.substring(0, 1000)}...`
       await this.playCurrentRecording();
     });
 
+    // PDF Preview button
+    const previewPdfButton = document.getElementById('previewPdfButton') as HTMLButtonElement;
+    previewPdfButton.addEventListener('click', () => {
+      this.showPdfPreviewModal();
+    });
+
     // Auto-save on content changes
     const titleElement = document.querySelector('.editor-title') as HTMLElement;
     const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
@@ -311,6 +319,274 @@ ${transcription.substring(0, 1000)}...`
     
     // Copy and save buttons
     this.setupCopyAndSaveButtons();
+  }
+
+  private async updatePdfPreviewButton() {
+    const previewButton = document.getElementById('previewPdfButton') as HTMLButtonElement;
+    
+    if (!this.currentUser) {
+      previewButton.style.display = 'none';
+      return;
+    }
+
+    // Check if user has any PDFs
+    const documents = await PdfService.getUserPdfDocuments();
+    if (documents.length > 0) {
+      previewButton.style.display = 'flex';
+    } else {
+      previewButton.style.display = 'none';
+    }
+  }
+
+  private showPdfPreviewModal() {
+    // Create a modal to show PDF list
+    const modal = document.createElement('div');
+    modal.className = 'pdf-viewer-modal pdf-viewer-visible';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+      <div class="pdf-viewer-overlay"></div>
+      <div class="pdf-viewer-content">
+        <div class="pdf-viewer-header">
+          <h3>Mes Documents PDF</h3>
+          <div class="pdf-viewer-controls">
+            <button class="action-button" id="closePdfListModal" title="Fermer">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+        </div>
+        <div class="pdf-viewer-body">
+          <div id="pdfListModalContent" style="width: 100%; padding: 20px; overflow-y: auto;">
+            <div class="loading">Chargement des documents...</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Close button functionality
+    const closeBtn = modal.querySelector('#closePdfListModal') as HTMLButtonElement;
+    const overlay = modal.querySelector('.pdf-viewer-overlay') as HTMLElement;
+    
+    const closeModal = () => {
+      modal.classList.remove('pdf-viewer-visible');
+      setTimeout(() => {
+        if (modal.parentNode) {
+          modal.parentNode.removeChild(modal);
+        }
+      }, 300);
+    };
+
+    closeBtn.addEventListener('click', closeModal);
+    overlay.addEventListener('click', closeModal);
+
+    // Load PDF documents
+    this.loadPdfDocumentsInModal(modal);
+  }
+
+  private async loadPdfDocumentsInModal(modal: HTMLElement) {
+    const content = modal.querySelector('#pdfListModalContent') as HTMLElement;
+    
+    try {
+      const documents = await PdfService.getUserPdfDocuments();
+      
+      if (documents.length === 0) {
+        content.innerHTML = `
+          <div style="text-align: center; color: var(--color-text-secondary); padding: 40px;">
+            <i class="fas fa-file-pdf" style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;"></i>
+            <p>Aucun document PDF trouvé</p>
+            <p style="font-size: 14px; margin-top: 8px;">Utilisez le bouton de téléversement PDF pour ajouter des documents.</p>
+          </div>
+        `;
+        return;
+      }
+
+      content.innerHTML = documents.map(doc => `
+        <div class="pdf-item" style="margin-bottom: 12px; cursor: pointer;" data-pdf-id="${doc.id}">
+          <div class="pdf-item-icon">
+            <i class="fas fa-file-pdf"></i>
+          </div>
+          <div class="pdf-item-info" style="flex: 1;">
+            <h5 class="pdf-item-title">${doc.title}</h5>
+            <div class="pdf-item-meta">
+              <span class="pdf-item-date">${new Date(doc.created_at).toLocaleDateString('fr-FR')}</span>
+              <span class="pdf-item-size">${this.formatFileSize(doc.file_size)}</span>
+              <span class="pdf-item-pages">${doc.page_count} pages</span>
+            </div>
+          </div>
+          <div class="pdf-item-actions">
+            <button class="pdf-action-btn view-btn" data-action="view" title="Voir en plein écran">
+              <i class="fas fa-expand"></i>
+            </button>
+            <button class="pdf-action-btn download-btn" data-action="download" title="Télécharger">
+              <i class="fas fa-download"></i>
+            </button>
+          </div>
+        </div>
+      `).join('');
+
+      // Add event listeners for PDF actions
+      content.addEventListener('click', async (e) => {
+        const target = e.target as HTMLElement;
+        const button = target.closest('.pdf-action-btn') as HTMLButtonElement;
+        const pdfItem = target.closest('.pdf-item') as HTMLElement;
+        
+        if (!pdfItem) return;
+        
+        const pdfId = pdfItem.dataset.pdfId!;
+        const document = documents.find(d => d.id === pdfId);
+        if (!document) return;
+
+        if (button) {
+          const action = button.dataset.action;
+          if (action === 'view') {
+            // Close the modal first
+            modal.classList.remove('pdf-viewer-visible');
+            setTimeout(() => {
+              if (modal.parentNode) {
+                modal.parentNode.removeChild(modal);
+              }
+            }, 300);
+            // Then show the PDF viewer
+            await this.pdfList.showPdfViewer(document);
+          } else if (action === 'download') {
+            await this.downloadPdf(document);
+          }
+        } else {
+          // Clicked on the PDF item itself - show quick preview
+          await this.showPdfQuickPreviewInModal(document, pdfItem, modal);
+        }
+      });
+
+    } catch (error) {
+      console.error('Error loading PDF documents:', error);
+      content.innerHTML = `
+        <div style="text-align: center; color: var(--color-recording); padding: 40px;">
+          <i class="fas fa-exclamation-triangle" style="font-size: 48px; margin-bottom: 16px;"></i>
+          <p>Erreur lors du chargement des documents</p>
+        </div>
+      `;
+    }
+  }
+
+  private async showPdfQuickPreviewInModal(document: PdfDocument, pdfItem: HTMLElement, modal: HTMLElement) {
+    // Check if preview is already shown
+    const existingPreview = pdfItem.querySelector('.pdf-quick-preview');
+    if (existingPreview) {
+      existingPreview.remove();
+      return;
+    }
+
+    // Create preview container
+    const previewContainer = document.createElement('div');
+    previewContainer.className = 'pdf-quick-preview';
+    previewContainer.innerHTML = `
+      <div class="pdf-quick-preview-header">
+        <span class="pdf-quick-preview-title">Aperçu - ${document.title}</span>
+        <button class="pdf-quick-preview-close" title="Fermer">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="pdf-quick-preview-content">
+        <div class="pdf-quick-preview-loading">
+          <i class="fas fa-spinner fa-spin"></i>
+          <span>Chargement de l'aperçu...</span>
+        </div>
+      </div>
+      <div class="pdf-quick-preview-actions">
+        <button class="pdf-quick-preview-btn" data-action="fullscreen">
+          <i class="fas fa-expand"></i>
+          Plein écran
+        </button>
+        <button class="pdf-quick-preview-btn" data-action="download">
+          <i class="fas fa-download"></i>
+          Télécharger
+        </button>
+      </div>
+    `;
+
+    // Insert after the pdf item
+    pdfItem.insertAdjacentElement('afterend', previewContainer);
+
+    // Add event listeners
+    const closeBtn = previewContainer.querySelector('.pdf-quick-preview-close') as HTMLButtonElement;
+    closeBtn.addEventListener('click', () => previewContainer.remove());
+
+    const actionBtns = previewContainer.querySelectorAll('.pdf-quick-preview-btn');
+    actionBtns.forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const action = (e.currentTarget as HTMLElement).dataset.action;
+        if (action === 'fullscreen') {
+          // Close the modal first
+          modal.classList.remove('pdf-viewer-visible');
+          setTimeout(() => {
+            if (modal.parentNode) {
+              modal.parentNode.removeChild(modal);
+            }
+          }, 300);
+          // Then show the PDF viewer
+          await this.pdfList.showPdfViewer(document);
+        } else if (action === 'download') {
+          await this.downloadPdf(document);
+        }
+      });
+    });
+
+    // Load PDF preview
+    try {
+      const pdfUrl = await PdfService.getPdfFileUrl(document.file_path);
+      if (pdfUrl) {
+        const content = previewContainer.querySelector('.pdf-quick-preview-content') as HTMLElement;
+        content.innerHTML = `
+          <iframe 
+            src="${pdfUrl}#toolbar=0&navpanes=0&scrollbar=0" 
+            class="pdf-quick-preview-frame"
+            frameborder="0">
+          </iframe>
+        `;
+      } else {
+        throw new Error('Impossible de charger le PDF');
+      }
+    } catch (error) {
+      console.error('Error loading PDF preview:', error);
+      const content = previewContainer.querySelector('.pdf-quick-preview-content') as HTMLElement;
+      content.innerHTML = `
+        <div class="pdf-quick-preview-error">
+          <i class="fas fa-exclamation-triangle"></i>
+          <span>Erreur lors du chargement de l'aperçu</span>
+        </div>
+      `;
+    }
+
+    // Animate in
+    setTimeout(() => {
+      previewContainer.classList.add('visible');
+    }, 10);
+  }
+
+  private async downloadPdf(document: PdfDocument) {
+    try {
+      const pdfUrl = await PdfService.getPdfFileUrl(document.file_path);
+      if (pdfUrl) {
+        const a = document.createElement('a');
+        a.href = pdfUrl;
+        a.download = document.title;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      alert('Erreur lors du téléchargement du PDF');
+    }
+  }
+
+  private formatFileSize(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
   private setupRecordingControls() {
@@ -974,6 +1250,9 @@ ${transcription}`
           if (createdDocument) {
             // Refresh PDF list
             this.pdfList.loadDocuments();
+            
+            // Update PDF preview button visibility
+            this.updatePdfPreviewButton();
             
             // If we have a current session, process the extracted text
             if (this.currentSession && extractedText.trim()) {
