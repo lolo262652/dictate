@@ -148,9 +148,22 @@ class DictationApp {
   private async createNewSession(): Promise<DictationSession | null> {
     if (!this.currentUser) return null;
 
+    // Generate title with current date
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+    const timeStr = now.toLocaleTimeString('fr-FR', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    const defaultTitle = `Enregistrement du ${dateStr} à ${timeStr}`;
+
     const session: Partial<DictationSession> = {
       user_id: this.currentUser.id,
-      title: 'Untitled Note',
+      title: defaultTitle,
       raw_transcription: '',
       summary: '',
       detailed_note: '',
@@ -161,8 +174,69 @@ class DictationApp {
     if (newSession) {
       this.currentSession = newSession;
       this.sessionsList.loadSessions();
+      
+      // Update the title in the UI
+      const titleElement = document.querySelector('.editor-title') as HTMLElement;
+      titleElement.textContent = defaultTitle;
     }
     return newSession;
+  }
+
+  private async generateSessionTitle(transcription: string): Promise<string> {
+    try {
+      // Get API key from environment variables
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        // Fallback to date-based title if no API key
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('fr-FR', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        });
+        return `Enregistrement du ${dateStr}`;
+      }
+
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+      const result = await model.generateContent([
+        `Crée un titre court et descriptif (maximum 60 caractères) pour cet enregistrement en français. Le titre doit résumer le contenu principal en une phrase courte et claire. Ne pas inclure de guillemets ou de ponctuation finale.
+
+Texte de l'enregistrement:
+${transcription.substring(0, 1000)}...`
+      ]);
+
+      let generatedTitle = result.response.text().trim();
+      
+      // Remove quotes if present
+      generatedTitle = generatedTitle.replace(/^["']|["']$/g, '');
+      
+      // Limit length
+      if (generatedTitle.length > 60) {
+        generatedTitle = generatedTitle.substring(0, 57) + '...';
+      }
+
+      // Add date
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit'
+      });
+      
+      return `${generatedTitle} (${dateStr})`;
+
+    } catch (error) {
+      console.error('Error generating title:', error);
+      // Fallback to date-based title
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      });
+      return `Enregistrement du ${dateStr}`;
+    }
   }
 
   private setupEventListeners() {
@@ -339,8 +413,16 @@ class DictationApp {
       const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
       rawTranscription.innerHTML = transcription;
 
+      // Generate a smart title based on the transcription
+      const smartTitle = await this.generateSessionTitle(transcription);
+      
+      // Update title in UI
+      const titleElement = document.querySelector('.editor-title') as HTMLElement;
+      titleElement.textContent = smartTitle;
+
       // Update session in database
       const updates: Partial<DictationSession> = {
+        title: smartTitle,
         raw_transcription: transcription,
         recording_duration: Math.floor((Date.now() - this.recordingStartTime) / 1000)
       };
@@ -350,6 +432,12 @@ class DictationApp {
       }
 
       await DatabaseService.updateSession(this.currentSession.id, updates);
+
+      // Update current session object
+      this.currentSession = { ...this.currentSession, ...updates };
+
+      // Refresh sessions list to show new title
+      this.sessionsList.loadSessions();
 
       // Generate summary and detailed note
       await this.generateSummaryAndNote(transcription);
@@ -823,10 +911,24 @@ ${transcription}`
               const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
               rawTranscription.innerHTML = extractedText;
 
+              // Generate a smart title based on the PDF content
+              const smartTitle = await this.generateSessionTitle(extractedText);
+              
+              // Update title in UI
+              const titleElement = document.querySelector('.editor-title') as HTMLElement;
+              titleElement.textContent = smartTitle;
+
               // Update session in database
               await DatabaseService.updateSession(this.currentSession.id, {
+                title: smartTitle,
                 raw_transcription: extractedText
               });
+
+              // Update current session object
+              this.currentSession = { ...this.currentSession, title: smartTitle, raw_transcription: extractedText };
+
+              // Refresh sessions list to show new title
+              this.sessionsList.loadSessions();
 
               // Generate summary and detailed note from PDF text
               await this.generateSummaryAndNote(extractedText);
@@ -1014,7 +1116,20 @@ ${summary}`
     const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
     const playButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
 
-    titleElement.textContent = 'Untitled Note';
+    // Generate new title with current date
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+    const timeStr = now.toLocaleTimeString('fr-FR', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    const newTitle = `Enregistrement du ${dateStr} à ${timeStr}`;
+
+    titleElement.textContent = newTitle;
     summaryEditor.innerHTML = '';
     polishedNote.innerHTML = '';
     rawTranscription.innerHTML = '';
