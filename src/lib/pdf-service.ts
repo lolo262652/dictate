@@ -79,7 +79,7 @@ export class PdfService {
       .from('pdf_documents')
       .select('*')
       .eq('id', id)
-      .single();
+      .maybeSingle();
 
     if (error) {
       console.error('Error fetching PDF document:', error);

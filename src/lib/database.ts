@@ -49,7 +49,7 @@ export class DatabaseService {
         .from('dictation_sessions')
         .select('*')
         .eq('id', id)
-        .single();
+        .maybeSingle();
 
       if (error) {
         console.error('Error fetching session:', error);
