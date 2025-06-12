@@ -5,7 +5,9 @@ import type { PdfDocument } from '../lib/supabase';
 export class PdfList {
   private container: HTMLElement;
   private documents: PdfDocument[] = [];
+  private filteredDocuments: PdfDocument[] = [];
   private pdfViewer: PdfViewer;
+  private searchTerm: string = '';
 
   constructor() {
     this.pdfViewer = new PdfViewer(() => {
@@ -40,40 +42,76 @@ export class PdfList {
     content.innerHTML = '<div class="loading">Chargement...</div>';
 
     this.documents = await PdfService.getUserPdfDocuments();
+    this.filteredDocuments = [...this.documents];
     this.renderDocuments();
+  }
+
+  // Method to filter documents based on search term from parent component
+  filterDocuments(searchTerm: string) {
+    this.searchTerm = searchTerm.toLowerCase().trim();
+    
+    if (!this.searchTerm) {
+      this.filteredDocuments = [...this.documents];
+    } else {
+      this.filteredDocuments = this.documents.filter(doc => {
+        const searchableText = [
+          doc.title,
+          doc.extracted_text
+        ].join(' ').toLowerCase();
+
+        return searchableText.includes(this.searchTerm);
+      });
+    }
+    
+    this.renderDocuments();
+  }
+
+  private highlightSearchTerm(text: string): string {
+    if (!this.searchTerm || !text) return text;
+    
+    const regex = new RegExp(`(${this.searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    return text.replace(regex, '<span class="highlight">$1</span>');
   }
 
   private renderDocuments() {
     const content = this.container.querySelector('#pdfListContent') as HTMLElement;
 
-    if (this.documents.length === 0) {
-      content.innerHTML = '<div class="no-documents">Aucun document PDF trouvé</div>';
+    if (this.filteredDocuments.length === 0) {
+      if (this.searchTerm) {
+        content.innerHTML = '<div class="no-documents">Aucun document PDF trouvé pour cette recherche</div>';
+      } else {
+        content.innerHTML = '<div class="no-documents">Aucun document PDF trouvé</div>';
+      }
       return;
     }
 
-    content.innerHTML = this.documents.map(doc => `
-      <div class="pdf-item" data-pdf-id="${doc.id}">
-        <div class="pdf-item-icon">
-          <i class="fas fa-file-pdf"></i>
-        </div>
-        <div class="pdf-item-info">
-          <h5 class="pdf-item-title">${doc.title}</h5>
-          <div class="pdf-item-meta">
-            <span class="pdf-item-date">${new Date(doc.created_at).toLocaleDateString('fr-FR')}</span>
-            <span class="pdf-item-size">${this.formatFileSize(doc.file_size)}</span>
-            <span class="pdf-item-pages">${doc.page_count} pages</span>
+    content.innerHTML = this.filteredDocuments.map(doc => {
+      const highlightedTitle = this.highlightSearchTerm(doc.title);
+      
+      return `
+        <div class="pdf-item" data-pdf-id="${doc.id}">
+          <div class="pdf-item-icon">
+            <i class="fas fa-file-pdf"></i>
+          </div>
+          <div class="pdf-item-info">
+            <h5 class="pdf-item-title">${highlightedTitle}</h5>
+            <div class="pdf-item-meta">
+              <span class="pdf-item-date">${new Date(doc.created_at).toLocaleDateString('fr-FR')}</span>
+              <span class="pdf-item-size">${this.formatFileSize(doc.file_size)}</span>
+              <span class="pdf-item-pages">${doc.page_count} pages</span>
+            </div>
+          </div>
+          <div class="pdf-item-actions">
+            <button class="pdf-action-btn view-btn" data-action="view" title="Voir">
+              <i class="fas fa-eye"></i>
+            </button>
+            <button class="pdf-action-btn delete-btn" data-action="delete" title="Supprimer">
+              <i class="fas fa-trash"></i>
+            </button>
           </div>
         </div>
-        <div class="pdf-item-actions">
-          <button class="pdf-action-btn view-btn" data-action="view" title="Voir">
-            <i class="fas fa-eye"></i>
-          </button>
-          <button class="pdf-action-btn delete-btn" data-action="delete" title="Supprimer">
-            <i class="fas fa-trash"></i>
-          </button>
-        </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
 
     // Add event listeners
     content.addEventListener('click', this.handleDocumentAction.bind(this));
@@ -96,8 +134,24 @@ export class PdfList {
       await this.pdfViewer.show(document);
     } else if (action === 'delete') {
       if (confirm('Êtes-vous sûr de vouloir supprimer ce document PDF ?')) {
-        await PdfService.deletePdfDocument(pdfId);
-        await this.loadDocuments();
+        // Disable the button to prevent multiple clicks
+        button.disabled = true;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        
+        const success = await PdfService.deletePdfDocument(pdfId);
+        
+        if (success) {
+          // Remove the document from local arrays
+          this.documents = this.documents.filter(d => d.id !== pdfId);
+          this.filteredDocuments = this.filteredDocuments.filter(d => d.id !== pdfId);
+          // Re-render the documents list
+          this.renderDocuments();
+        } else {
+          alert('Erreur lors de la suppression du document');
+          // Re-enable the button
+          button.disabled = false;
+          button.innerHTML = '<i class="fas fa-trash"></i>';
+        }
       }
     }
   }

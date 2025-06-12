@@ -70,6 +70,29 @@ class DictationApp {
     this.setupEventListeners();
     this.setupTabNavigation();
     this.setupAudioPlayer();
+    this.setupSearchIntegration();
+  }
+
+  private setupSearchIntegration() {
+    // Get the search input from the sessions list
+    const sessionsElement = this.sessionsList.getElement();
+    const searchInput = sessionsElement.querySelector('#sessionSearchInput') as HTMLInputElement;
+    
+    if (searchInput) {
+      // Listen for search input changes and apply to PDF list as well
+      searchInput.addEventListener('input', (e) => {
+        const searchTerm = (e.target as HTMLInputElement).value;
+        this.pdfList.filterDocuments(searchTerm);
+      });
+
+      // Also listen for clear button
+      const clearBtn = sessionsElement.querySelector('#searchClearBtn') as HTMLButtonElement;
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          this.pdfList.filterDocuments('');
+        });
+      }
+    }
   }
 
   private showMainApp() {
