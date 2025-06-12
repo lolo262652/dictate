@@ -5,6 +5,7 @@ import { PdfService } from './src/lib/pdf-service';
 import { AuthModal } from './src/components/AuthModal';
 import { SessionsList } from './src/components/SessionsList';
 import { PdfList } from './src/components/PdfList';
+import { TranscriptionProgress } from './src/components/TranscriptionProgress';
 import type { DictationSession, PdfDocument } from './src/lib/supabase';
 import type { User } from '@supabase/supabase-js';
 
@@ -19,6 +20,7 @@ class DictationApp {
   private authModal: AuthModal;
   private sessionsList: SessionsList;
   private pdfList: PdfList;
+  private transcriptionProgress: TranscriptionProgress;
   private isRecording = false;
   private mediaRecorder: MediaRecorder | null = null;
   private audioChunks: Blob[] = [];
@@ -33,11 +35,13 @@ class DictationApp {
   private currentAudioBlob: Blob | null = null;
   private audioPlayer: HTMLAudioElement | null = null;
   private playbackTimer: number | null = null;
+  private isProcessing = false;
 
   constructor() {
     this.authModal = new AuthModal();
     this.sessionsList = new SessionsList(this.loadSession.bind(this));
     this.pdfList = new PdfList();
+    this.transcriptionProgress = new TranscriptionProgress();
     this.initializeApp();
   }
 
@@ -331,7 +335,7 @@ ${transcription.substring(0, 1000)}...`
   }
 
   private async startRecording() {
-    if (!this.currentUser) return;
+    if (!this.currentUser || this.isProcessing) return;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -379,10 +383,19 @@ ${transcription.substring(0, 1000)}...`
   }
 
   private async processRecording(audioBlob: Blob) {
-    if (!this.currentUser || !this.currentSession) return;
+    if (!this.currentUser || !this.currentSession || this.isProcessing) return;
+
+    this.isProcessing = true;
+
+    // Show progress indicator
+    this.transcriptionProgress.show(() => {
+      this.isProcessing = false;
+    });
 
     try {
-      // Upload audio file
+      // Step 1: Upload audio file
+      this.transcriptionProgress.setStep(0, 'Téléversement du fichier audio...');
+      
       const audioPath = await StorageService.uploadAudioFile(
         new File([audioBlob], `recording-${Date.now()}.wav`, { type: 'audio/wav' }),
         this.currentUser.id,
@@ -393,7 +406,9 @@ ${transcription.substring(0, 1000)}...`
       const playButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
       playButton.style.display = 'flex';
 
-      // Convert audio to base64 for transcription
+      // Step 2: Convert audio to base64 for transcription
+      this.transcriptionProgress.setStep(1, 'Préparation de la transcription...');
+      
       const reader = new FileReader();
       reader.onload = async () => {
         const base64Audio = (reader.result as string).split(',')[1];
@@ -403,12 +418,13 @@ ${transcription.substring(0, 1000)}...`
 
     } catch (error) {
       console.error('Error processing recording:', error);
-      alert('Erreur lors du traitement de l\'enregistrement');
+      this.transcriptionProgress.setError('Erreur lors du traitement de l\'enregistrement');
+      this.isProcessing = false;
     }
   }
 
   private async transcribeAudio(base64Audio: string, audioPath?: string | null) {
-    if (!this.currentSession) return;
+    if (!this.currentSession || !this.isProcessing) return;
 
     try {
       // Get API key from environment variables
@@ -419,6 +435,9 @@ ${transcription.substring(0, 1000)}...`
 
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+      // Step 2: Transcription
+      this.transcriptionProgress.setStep(1, 'Transcription en cours...');
 
       const result = await model.generateContent([
         "Transcris cet audio en français. Retourne uniquement le texte transcrit, sans commentaires additionnels.",
@@ -436,7 +455,9 @@ ${transcription.substring(0, 1000)}...`
       const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
       rawTranscription.innerHTML = transcription;
 
-      // Generate a smart title based on the transcription
+      // Step 3: Generate title
+      this.transcriptionProgress.setStep(2, 'Génération du titre...');
+      
       const smartTitle = await this.generateSessionTitle(transcription);
       
       // Update title in UI
@@ -467,12 +488,13 @@ ${transcription.substring(0, 1000)}...`
 
     } catch (error) {
       console.error('Error transcribing audio:', error);
-      alert('Erreur lors de la transcription: ' + (error as Error).message);
+      this.transcriptionProgress.setError('Erreur lors de la transcription: ' + (error as Error).message);
+      this.isProcessing = false;
     }
   }
 
   private async generateSummaryAndNote(transcription: string) {
-    if (!this.currentSession) return;
+    if (!this.currentSession || !this.isProcessing) return;
 
     try {
       // Get API key from environment variables
@@ -482,7 +504,9 @@ ${transcription.substring(0, 1000)}...`
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-      // Generate summary
+      // Step 4: Generate summary
+      this.transcriptionProgress.setStep(3, 'Création du résumé...');
+
       const summaryResult = await model.generateContent([
         `Crée un résumé concis et structuré de ce texte en français. Le résumé doit capturer les points clés et être facilement lisible. Utilise le format Markdown pour la structure.
 
@@ -494,7 +518,9 @@ ${transcription}`
       const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
       summaryEditor.innerHTML = marked(summary) as string;
 
-      // Generate detailed note
+      // Step 5: Generate detailed note
+      this.transcriptionProgress.setStep(4, 'Rédaction de la note détaillée...');
+
       const noteResult = await model.generateContent([
         `Transforme ce texte en une note détaillée et bien structurée en français. Organise le contenu de manière logique avec des titres, sous-titres et points clés. Utilise le format Markdown pour une présentation claire.
 
@@ -514,8 +540,14 @@ ${transcription}`
 
       this.updatePlaceholders();
 
+      // Show success
+      this.transcriptionProgress.setSuccess('Traitement terminé avec succès !');
+      this.isProcessing = false;
+
     } catch (error) {
       console.error('Error generating summary and note:', error);
+      this.transcriptionProgress.setError('Erreur lors de la génération du contenu');
+      this.isProcessing = false;
     }
   }
 
@@ -856,12 +888,19 @@ ${transcription}`
   }
 
   private async processUploadedAudio(file: File) {
-    if (!this.currentUser) return;
+    if (!this.currentUser || this.isProcessing) return;
 
     // Create new session if none exists
     if (!this.currentSession) {
       await this.createNewSession();
     }
+
+    this.isProcessing = true;
+
+    // Show progress indicator
+    this.transcriptionProgress.show(() => {
+      this.isProcessing = false;
+    });
 
     try {
       // Store the uploaded file as current audio blob
@@ -870,6 +909,9 @@ ${transcription}`
       // Show play button
       const playButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
       playButton.style.display = 'flex';
+
+      // Step 1: File ready
+      this.transcriptionProgress.setStep(0, 'Fichier audio chargé');
 
       // Convert to base64 for transcription
       const reader = new FileReader();
@@ -881,18 +923,28 @@ ${transcription}`
 
     } catch (error) {
       console.error('Error processing uploaded audio:', error);
-      alert('Erreur lors du traitement du fichier audio');
+      this.transcriptionProgress.setError('Erreur lors du traitement du fichier audio');
+      this.isProcessing = false;
     }
   }
 
   private async processPdfFile(file: File) {
-    if (!this.currentUser) return;
+    if (!this.currentUser || this.isProcessing) return;
+
+    this.isProcessing = true;
+
+    // Show progress indicator
+    this.transcriptionProgress.show(() => {
+      this.isProcessing = false;
+    });
 
     try {
-      // Extract text from PDF
+      // Step 1: Extract text from PDF
+      this.transcriptionProgress.setStep(0, 'Extraction du texte du PDF...');
       const extractedText = await PdfService.extractTextFromPdf(file);
       
-      // Upload PDF file
+      // Step 2: Upload PDF file
+      this.transcriptionProgress.setStep(1, 'Téléversement du PDF...');
       const filePath = await PdfService.uploadPdfFile(file, this.currentUser.id, this.currentSession?.id);
       
       if (!filePath) {
@@ -934,7 +986,8 @@ ${transcription}`
               const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
               rawTranscription.innerHTML = extractedText;
 
-              // Generate a smart title based on the PDF content
+              // Step 3: Generate title
+              this.transcriptionProgress.setStep(2, 'Génération du titre...');
               const smartTitle = await this.generateSessionTitle(extractedText);
               
               // Update title in UI
@@ -955,20 +1008,23 @@ ${transcription}`
 
               // Generate summary and detailed note from PDF text
               await this.generateSummaryAndNote(extractedText);
+            } else {
+              this.transcriptionProgress.setSuccess('PDF téléversé avec succès !');
+              this.isProcessing = false;
             }
-            
-            alert('PDF téléversé et traité avec succès !');
           }
         } catch (error) {
           console.error('Error processing PDF:', error);
-          alert('Erreur lors du traitement du PDF');
+          this.transcriptionProgress.setError('Erreur lors du traitement du PDF');
+          this.isProcessing = false;
         }
       };
       reader.readAsArrayBuffer(file);
 
     } catch (error) {
       console.error('Error processing PDF file:', error);
-      alert('Erreur lors du traitement du fichier PDF: ' + (error as Error).message);
+      this.transcriptionProgress.setError('Erreur lors du traitement du fichier PDF: ' + (error as Error).message);
+      this.isProcessing = false;
     }
   }
 
@@ -1019,22 +1075,38 @@ ${transcription}`
     const refreshNoteButton = document.getElementById('refreshNoteFromSummaryButton') as HTMLButtonElement;
 
     refreshAllButton.addEventListener('click', async () => {
+      if (this.isProcessing) return;
+      
       const rawContent = (document.getElementById('rawTranscription') as HTMLElement).textContent || '';
       if (rawContent.trim()) {
+        this.isProcessing = true;
+        this.transcriptionProgress.show(() => {
+          this.isProcessing = false;
+        });
+        
+        this.transcriptionProgress.setStep(2, 'Génération du titre...');
         await this.generateSummaryAndNote(rawContent);
       }
     });
 
     refreshNoteButton.addEventListener('click', async () => {
+      if (this.isProcessing) return;
+      
       const summaryContent = (document.getElementById('summaryEditor') as HTMLElement).textContent || '';
       if (summaryContent.trim()) {
+        this.isProcessing = true;
+        this.transcriptionProgress.show(() => {
+          this.isProcessing = false;
+        });
+        
+        this.transcriptionProgress.setStep(4, 'Génération de la note détaillée...');
         await this.generateDetailedNoteFromSummary(summaryContent);
       }
     });
   }
 
   private async generateDetailedNoteFromSummary(summary: string) {
-    if (!this.currentSession) return;
+    if (!this.currentSession || !this.isProcessing) return;
 
     try {
       // Get API key from environment variables
@@ -1061,9 +1133,13 @@ ${summary}`
       });
 
       this.updatePlaceholders();
+      this.transcriptionProgress.setSuccess('Note détaillée générée avec succès !');
+      this.isProcessing = false;
 
     } catch (error) {
       console.error('Error generating detailed note from summary:', error);
+      this.transcriptionProgress.setError('Erreur lors de la génération de la note détaillée');
+      this.isProcessing = false;
     }
   }
 

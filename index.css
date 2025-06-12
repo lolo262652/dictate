@@ -118,6 +118,186 @@ body.light-mode {
   --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0,0,0,0.05);
 }
 
+/* Transcription Progress Indicator */
+.transcription-progress {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 32px;
+  box-shadow: var(--shadow-lg);
+  z-index: 10000;
+  text-align: center;
+  min-width: 320px;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.9);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: none;
+}
+
+.transcription-progress.visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  pointer-events: auto;
+}
+
+.transcription-progress-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 20px;
+  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-alt));
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  color: white;
+  animation: transcriptionPulse 2s ease-in-out infinite;
+}
+
+@keyframes transcriptionPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(130, 170, 255, 0.4);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 20px rgba(130, 170, 255, 0);
+  }
+}
+
+.transcription-progress-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 12px;
+}
+
+.transcription-progress-message {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+.transcription-progress-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.transcription-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  transition: color 0.3s ease;
+}
+
+.transcription-step.active {
+  color: var(--color-accent);
+}
+
+.transcription-step.completed {
+  color: var(--color-success);
+}
+
+.transcription-step-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  transition: all 0.3s ease;
+  flex-shrink: 0;
+}
+
+.transcription-step.active .transcription-step-icon {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: white;
+  animation: stepPulse 1.5s ease-in-out infinite;
+}
+
+.transcription-step.completed .transcription-step-icon {
+  border-color: var(--color-success);
+  background: var(--color-success);
+  color: white;
+}
+
+@keyframes stepPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+.transcription-progress-bar {
+  width: 100%;
+  height: 4px;
+  background: var(--color-surface);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.transcription-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-alt));
+  border-radius: 2px;
+  width: 0%;
+  transition: width 0.5s ease;
+  animation: progressShimmer 2s ease-in-out infinite;
+}
+
+@keyframes progressShimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+.transcription-progress-fill {
+  background: linear-gradient(
+    90deg,
+    var(--color-accent) 0%,
+    var(--color-accent-alt) 50%,
+    var(--color-accent) 100%
+  );
+  background-size: 200px 100%;
+}
+
+.transcription-progress-cancel {
+  padding: 8px 16px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s ease;
+}
+
+.transcription-progress-cancel:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
 /* Delete Animation Styles */
 @keyframes deleteSlideOut {
   0% {
@@ -1721,6 +1901,21 @@ body.light-mode .record-button.recording .record-button-inner { color: white; }
     border-top: 1px solid var(--color-border);
     max-height: 200px;
   }
+
+  .transcription-progress {
+    min-width: 280px;
+    padding: 24px;
+  }
+
+  .transcription-progress-icon {
+    width: 48px;
+    height: 48px;
+    font-size: 20px;
+  }
+
+  .transcription-progress-title {
+    font-size: 18px;
+  }
 }
 
 @media (max-width: 480px) { 
@@ -1753,5 +1948,24 @@ body.light-mode .record-button.recording .record-button-inner { color: white; }
   .pdf-preview-container,
   .pdf-text-container {
     padding: 15px;
+  }
+
+  .transcription-progress {
+    min-width: 260px;
+    padding: 20px;
+  }
+
+  .transcription-progress-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+
+  .transcription-progress-title {
+    font-size: 16px;
+  }
+
+  .transcription-progress-message {
+    font-size: 13px;
   }
 }
