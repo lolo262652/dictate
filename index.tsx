@@ -561,25 +561,81 @@ async function processRecording(audioBlob: Blob): Promise<void> {
 
 async function transcribeAudio(audioBlob: Blob): Promise<string> {
   try {
+    // Validate audio blob
+    if (!audioBlob || audioBlob.size === 0) {
+      throw new Error('Fichier audio vide ou invalide');
+    }
+
+    // Check file size (Gemini has limits)
+    const maxSize = 20 * 1024 * 1024; // 20MB limit
+    if (audioBlob.size > maxSize) {
+      throw new Error('Fichier audio trop volumineux (maximum 20MB)');
+    }
+
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     
-    const arrayBuffer = await audioBlob.arrayBuffer();
-    const base64Audio = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    // Convert to array buffer with error handling
+    let arrayBuffer: ArrayBuffer;
+    try {
+      arrayBuffer = await audioBlob.arrayBuffer();
+    } catch (error) {
+      throw new Error('Erreur lors de la lecture du fichier audio');
+    }
+
+    // Convert to base64 with chunking to avoid stack overflow
+    const chunkSize = 1024 * 1024; // 1MB chunks
+    const uint8Array = new Uint8Array(arrayBuffer);
+    let base64Audio = '';
     
-    const result = await model.generateContent([
+    for (let i = 0; i < uint8Array.length; i += chunkSize) {
+      const chunk = uint8Array.slice(i, i + chunkSize);
+      const chunkString = String.fromCharCode.apply(null, Array.from(chunk));
+      base64Audio += btoa(chunkString);
+    }
+
+    // Prepare the content for Gemini
+    const content = [
       {
         inlineData: {
           data: base64Audio,
-          mimeType: audioBlob.type
+          mimeType: audioBlob.type || 'audio/webm'
         }
       },
       "Transcris fidèlement cet enregistrement audio en français. Retourne uniquement le texte transcrit, sans commentaires ni formatage."
-    ]);
+    ];
+
+    // Generate content with timeout
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Timeout de transcription (60s)')), 60000);
+    });
+
+    const transcriptionPromise = model.generateContent(content);
     
+    const result = await Promise.race([transcriptionPromise, timeoutPromise]) as any;
     const response = await result.response;
-    return response.text().trim();
+    const text = response.text().trim();
+
+    if (!text || text.length === 0) {
+      throw new Error('Aucun texte transcrit reçu');
+    }
+
+    return text;
   } catch (error) {
     console.error('Transcription error:', error);
+    
+    // Provide more specific error messages
+    if (error instanceof Error) {
+      if (error.message.includes('quota')) {
+        throw new Error('Quota API dépassé. Veuillez réessayer plus tard.');
+      } else if (error.message.includes('network') || error.message.includes('fetch')) {
+        throw new Error('Erreur de connexion. Vérifiez votre connexion internet.');
+      } else if (error.message.includes('timeout')) {
+        throw new Error('Timeout de transcription. Le fichier est peut-être trop long.');
+      } else {
+        throw new Error(`Erreur de transcription: ${error.message}`);
+      }
+    }
+    
     throw new Error('Erreur lors de la transcription');
   }
 }
