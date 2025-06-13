@@ -12,9 +12,6 @@ import { PdfService } from './src/lib/pdf-service';
 import type { DictationSession, PdfDocument } from './src/lib/supabase';
 import type { User } from '@supabase/supabase-js';
 
-// Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || '');
-
 // Global variables
 let mediaRecorder: MediaRecorder | null = null;
 let audioChunks: Blob[] = [];
@@ -22,766 +19,290 @@ let recordingStartTime: number = 0;
 let recordingTimer: number | null = null;
 let recordingDuration = 30; // Default 30 minutes
 let maxRecordingTime = 30 * 60 * 1000; // 30 minutes in milliseconds
-let isRecording = false;
+let currentAudioBlob: Blob | null = null;
+let currentSessionId: string | null = null;
 let currentUser: User | null = null;
-let currentSession: DictationSession | null = null;
+let liveWaveformAnimationId: number | null = null;
+let audioContext: AudioContext | null = null;
+let analyser: AnalyserNode | null = null;
+let dataArray: Uint8Array | null = null;
+
+// UI Components
 let authModal: AuthModal;
 let sessionsList: SessionsList;
 let pdfList: PdfList;
 let transcriptionProgress: TranscriptionProgress;
 
-// Audio playback variables
-let currentAudio: HTMLAudioElement | null = null;
-let isPlaying = false;
+// Initialize Gemini AI
+const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || '');
 
-// Theme management
-let isDarkMode = true;
+// Microphone status tracking
+let microphoneStatus = {
+  available: false,
+  permission: 'unknown' as 'granted' | 'denied' | 'prompt' | 'unknown',
+  error: null as string | null
+};
 
-// Microphone permission state
-let microphonePermission: PermissionState | null = null;
-let microphoneAvailable = false;
+// Check microphone availability and permissions
+async function checkMicrophoneStatus(): Promise<void> {
+  try {
+    // Reset status
+    microphoneStatus = {
+      available: false,
+      permission: 'unknown',
+      error: null
+    };
 
-// DOM elements
-const recordButton = document.getElementById('recordButton') as HTMLButtonElement;
-const recordingStatus = document.getElementById('recordingStatus') as HTMLSpanElement;
-const rawTranscription = document.getElementById('rawTranscription') as HTMLDivElement;
-const summaryEditor = document.getElementById('summaryEditor') as HTMLDivElement;
-const polishedNote = document.getElementById('polishedNote') as HTMLDivElement;
-const editorTitle = document.querySelector('.editor-title') as HTMLDivElement;
-const durationInput = document.getElementById('durationInput') as HTMLInputElement;
-const setDurationButton = document.getElementById('setDurationButton') as HTMLButtonElement;
-const uploadAudioButton = document.getElementById('uploadAudioButton') as HTMLButtonElement;
-const audioFileUpload = document.getElementById('audioFileUpload') as HTMLInputElement;
-const uploadPdfButton = document.getElementById('uploadPdfButton') as HTMLButtonElement;
-const pdfFileUpload = document.getElementById('pdfFileUpload') as HTMLInputElement;
-const playRecordingButton = document.getElementById('playRecordingButton') as HTMLButtonElement;
-const refreshAllButton = document.getElementById('refreshAllButton') as HTMLButtonElement;
-const refreshNoteFromSummaryButton = document.getElementById('refreshNoteFromSummaryButton') as HTMLButtonElement;
-const copyRawTranscriptionButton = document.getElementById('copyRawTranscriptionButton') as HTMLButtonElement;
-const copySummaryButton = document.getElementById('copySummaryButton') as HTMLButtonElement;
-const saveSummaryButton = document.getElementById('saveSummaryButton') as HTMLButtonElement;
-const copyDetailedNoteButton = document.getElementById('copyDetailedNoteButton') as HTMLButtonElement;
-const saveDetailedNoteButton = document.getElementById('saveDetailedNoteButton') as HTMLButtonElement;
-const saveAllButton = document.getElementById('saveAllButton') as HTMLButtonElement;
-const newButton = document.getElementById('newButton') as HTMLButtonElement;
-const themeToggleButton = document.getElementById('themeToggleButton') as HTMLButtonElement;
-const logoutButton = document.getElementById('logoutButton') as HTMLButtonElement;
+    // Check if getUserMedia is supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      microphoneStatus.error = 'Votre navigateur ne supporte pas l\'enregistrement audio. Veuillez utiliser un navigateur moderne comme Chrome, Firefox ou Safari.';
+      updateMicrophoneUI();
+      return;
+    }
 
-// Audio playback elements
-const audioPlaybackControls = document.getElementById('audioPlaybackControls') as HTMLDivElement;
-const playPauseBtn = document.getElementById('playPauseBtn') as HTMLButtonElement;
-const stopPlaybackBtn = document.getElementById('stopPlaybackBtn') as HTMLButtonElement;
-const audioSeeker = document.getElementById('audioSeeker') as HTMLInputElement;
-const playbackTitle = document.getElementById('playbackTitle') as HTMLSpanElement;
-const playbackTime = document.getElementById('playbackTime') as HTMLSpanElement;
-const audioPlayer = document.getElementById('audioPlayer') as HTMLAudioElement;
+    // Check if we're on HTTPS or localhost
+    const isSecureContext = window.isSecureContext || location.protocol === 'https:' || location.hostname === 'localhost';
+    if (!isSecureContext) {
+      microphoneStatus.error = 'L\'accès au microphone nécessite une connexion sécurisée (HTTPS). Veuillez accéder à l\'application via HTTPS.';
+      updateMicrophoneUI();
+      return;
+    }
 
-// Live recording elements
-const liveRecordingTitle = document.getElementById('liveRecordingTitle') as HTMLDivElement;
-const liveWaveformCanvas = document.getElementById('liveWaveformCanvas') as HTMLCanvasElement;
-const liveRecordingTimerDisplay = document.getElementById('liveRecordingTimerDisplay') as HTMLDivElement;
+    // Check permissions if available
+    if ('permissions' in navigator) {
+      try {
+        const permissionStatus = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        microphoneStatus.permission = permissionStatus.state;
+        
+        if (permissionStatus.state === 'denied') {
+          microphoneStatus.error = 'L\'accès au microphone a été refusé. Veuillez autoriser l\'accès au microphone dans les paramètres de votre navigateur.';
+          updateMicrophoneUI();
+          return;
+        }
+      } catch (e) {
+        console.log('Permission API not fully supported, will try direct access');
+      }
+    }
 
-// Tab navigation
-const tabButtons = document.querySelectorAll('.tab-button');
-const noteContents = document.querySelectorAll('.note-content');
-const activeTabIndicator = document.querySelector('.active-tab-indicator') as HTMLElement;
+    // Try to enumerate devices to check for microphones
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(device => device.kind === 'audioinput');
+      
+      if (audioInputs.length === 0) {
+        microphoneStatus.error = 'Aucun microphone détecté. Veuillez connecter un microphone et actualiser la page.';
+        updateMicrophoneUI();
+        return;
+      }
+    } catch (e) {
+      console.log('Could not enumerate devices, will try direct access');
+    }
 
-// Waveform visualization
-let audioContext: AudioContext | null = null;
-let analyser: AnalyserNode | null = null;
-let dataArray: Uint8Array | null = null;
-let animationId: number | null = null;
+    // Try to get user media to test actual access
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      
+      // Success! Clean up the test stream
+      stream.getTracks().forEach(track => track.stop());
+      
+      microphoneStatus.available = true;
+      microphoneStatus.permission = 'granted';
+      microphoneStatus.error = null;
+      
+    } catch (error: any) {
+      console.error('Microphone access error:', error);
+      
+      switch (error.name) {
+        case 'NotAllowedError':
+          microphoneStatus.permission = 'denied';
+          microphoneStatus.error = 'L\'accès au microphone a été refusé. Cliquez sur l\'icône de microphone dans la barre d\'adresse pour autoriser l\'accès.';
+          break;
+        case 'NotFoundError':
+          microphoneStatus.error = 'Aucun microphone trouvé. Veuillez connecter un microphone et actualiser la page.';
+          break;
+        case 'NotReadableError':
+          microphoneStatus.error = 'Le microphone est utilisé par une autre application. Fermez les autres applications utilisant le microphone et réessayez.';
+          break;
+        case 'OverconstrainedError':
+          microphoneStatus.error = 'Les paramètres audio demandés ne sont pas supportés par votre microphone.';
+          break;
+        case 'SecurityError':
+          microphoneStatus.error = 'Erreur de sécurité. L\'accès au microphone nécessite une connexion sécurisée (HTTPS).';
+          break;
+        default:
+          microphoneStatus.error = `Erreur d'accès au microphone: ${error.message || 'Erreur inconnue'}`;
+      }
+    }
 
-// Initialize the application
-async function initializeApp() {
-  console.log('Initializing app...');
+    updateMicrophoneUI();
+    
+  } catch (error) {
+    console.error('Error checking microphone status:', error);
+    microphoneStatus.error = 'Erreur lors de la vérification du microphone.';
+    updateMicrophoneUI();
+  }
+}
+
+// Update UI based on microphone status
+function updateMicrophoneUI(): void {
+  const recordButton = document.getElementById('recordButton') as HTMLButtonElement;
+  const recordingStatus = document.getElementById('recordingStatus') as HTMLElement;
   
-  // Show loading state
-  const appContainer = document.getElementById('mainApp') as HTMLElement;
-  appContainer.style.opacity = '0';
+  if (!recordButton || !recordingStatus) return;
+
+  if (microphoneStatus.available) {
+    recordButton.disabled = false;
+    recordButton.title = 'Commencer l\'enregistrement';
+    recordingStatus.textContent = 'Prêt à enregistrer';
+    recordButton.style.opacity = '1';
+  } else {
+    recordButton.disabled = true;
+    recordButton.title = microphoneStatus.error || 'Microphone non disponible';
+    recordingStatus.textContent = microphoneStatus.error || 'Microphone non disponible';
+    recordButton.style.opacity = '0.5';
+  }
+}
+
+// Show microphone help dialog
+function showMicrophoneHelp(): void {
+  const helpMessage = microphoneStatus.error || 'Problème d\'accès au microphone';
   
-  // Create loading overlay
-  const loadingOverlay = document.createElement('div');
-  loadingOverlay.style.cssText = `
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: var(--color-bg);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 10000;
-    transition: opacity 0.5s ease;
-  `;
+  let instructions = '';
   
-  loadingOverlay.innerHTML = `
-    <div style="text-align: center;">
-      <div style="
-        width: 64px;
-        height: 64px;
-        margin: 0 auto 24px;
-        background: linear-gradient(135deg, var(--color-accent), var(--color-accent-alt));
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 24px;
-        color: white;
-        animation: loadingPulse 2s ease-in-out infinite;
-      ">
-        <i class="fas fa-microphone-alt"></i>
+  if (microphoneStatus.permission === 'denied') {
+    instructions = `
+      <h3>Comment autoriser l'accès au microphone :</h3>
+      <ol>
+        <li>Cliquez sur l'icône de microphone (🎤) ou de cadenas (🔒) dans la barre d'adresse</li>
+        <li>Sélectionnez "Autoriser" pour le microphone</li>
+        <li>Actualisez la page</li>
+      </ol>
+      <p><strong>Ou dans les paramètres du navigateur :</strong></p>
+      <ul>
+        <li><strong>Chrome :</strong> Paramètres → Confidentialité et sécurité → Paramètres du site → Microphone</li>
+        <li><strong>Firefox :</strong> Paramètres → Vie privée et sécurité → Permissions → Microphone</li>
+        <li><strong>Safari :</strong> Préférences → Sites web → Microphone</li>
+      </ul>
+    `;
+  } else if (!window.isSecureContext && location.protocol !== 'https:') {
+    instructions = `
+      <h3>Connexion sécurisée requise :</h3>
+      <p>L'accès au microphone nécessite une connexion HTTPS pour des raisons de sécurité.</p>
+      <p>Veuillez accéder à l'application via une URL HTTPS.</p>
+    `;
+  } else {
+    instructions = `
+      <h3>Vérifications à effectuer :</h3>
+      <ol>
+        <li>Vérifiez qu'un microphone est connecté à votre ordinateur</li>
+        <li>Fermez les autres applications utilisant le microphone (Zoom, Teams, etc.)</li>
+        <li>Vérifiez les paramètres audio de votre système</li>
+        <li>Actualisez la page et réessayez</li>
+      </ol>
+    `;
+  }
+
+  const modal = document.createElement('div');
+  modal.className = 'delete-confirmation-modal visible';
+  modal.innerHTML = `
+    <div class="delete-confirmation-content">
+      <div class="delete-confirmation-icon">
+        <i class="fas fa-microphone-slash"></i>
       </div>
-      <h2 style="
-        font-size: 24px;
-        font-weight: 600;
-        color: var(--color-text);
-        margin-bottom: 12px;
-        font-family: var(--font-primary);
-      ">DICTATEAI</h2>
-      <p style="
-        font-size: 14px;
-        color: var(--color-text-secondary);
-        margin-bottom: 32px;
-        font-family: var(--font-primary);
-      ">Chargement de l'application...</p>
-      <div style="
-        width: 200px;
-        height: 4px;
-        background: var(--color-surface);
-        border-radius: 2px;
-        overflow: hidden;
-        margin: 0 auto;
-      ">
-        <div style="
-          height: 100%;
-          background: linear-gradient(90deg, var(--color-accent), var(--color-accent-alt));
-          border-radius: 2px;
-          width: 100%;
-          animation: loadingProgress 2s ease-in-out infinite;
-        "></div>
+      <h3 class="delete-confirmation-title">Problème de microphone</h3>
+      <div class="delete-confirmation-message" style="text-align: left; max-height: 300px; overflow-y: auto;">
+        <p style="margin-bottom: 16px;"><strong>Erreur :</strong> ${helpMessage}</p>
+        ${instructions}
+      </div>
+      <div class="delete-confirmation-actions">
+        <button class="delete-confirmation-btn cancel" id="helpCloseBtn">Fermer</button>
+        <button class="delete-confirmation-btn confirm" id="helpRetryBtn">Réessayer</button>
       </div>
     </div>
   `;
-  
-  // Add loading animations
-  const style = document.createElement('style');
-  style.textContent = `
-    @keyframes loadingPulse {
-      0%, 100% {
-        transform: scale(1);
-        box-shadow: 0 0 0 0 rgba(130, 170, 255, 0.4);
-      }
-      50% {
-        transform: scale(1.05);
-        box-shadow: 0 0 0 20px rgba(130, 170, 255, 0);
-      }
-    }
-    
-    @keyframes loadingProgress {
-      0% {
-        transform: translateX(-100%);
-      }
-      50% {
-        transform: translateX(0%);
-      }
-      100% {
-        transform: translateX(100%);
-      }
-    }
-  `;
-  document.head.appendChild(style);
-  
-  document.body.appendChild(loadingOverlay);
-  
-  try {
-    // Initialize components
-    authModal = new AuthModal();
-    sessionsList = new SessionsList(loadSession);
-    pdfList = new PdfList();
-    transcriptionProgress = new TranscriptionProgress();
 
-    // Add sessions list to the page
-    const mainContent = document.querySelector('.main-content') as HTMLElement;
-    mainContent.parentNode?.insertBefore(sessionsList.getElement(), mainContent);
-
-    // Add PDF list to sessions list
-    const sessionsContent = sessionsList.getElement().querySelector('.sessions-content') as HTMLElement;
-    sessionsContent.appendChild(pdfList.getElement());
-
-    // Set up authentication
-    await setupAuth();
-    
-    // Check microphone availability and permissions
-    await checkMicrophoneAvailability();
-    
-    // Set up event listeners
-    setupEventListeners();
-    setupTabNavigation();
-    
-    // Initialize theme
-    initializeTheme();
-    
-    // Create a new note by default
-    createNewNote();
-    
-    // Simulate loading time
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // Hide loading overlay and show app
-    loadingOverlay.style.opacity = '0';
-    setTimeout(() => {
-      document.body.removeChild(loadingOverlay);
-      document.head.removeChild(style);
-      appContainer.style.opacity = '1';
-      appContainer.classList.add('app-entrance');
-    }, 500);
-    
-    console.log('App initialized successfully');
-  } catch (error) {
-    console.error('Error initializing app:', error);
-    // Hide loading and show error
-    loadingOverlay.innerHTML = `
-      <div style="text-align: center;">
-        <div style="
-          width: 64px;
-          height: 64px;
-          margin: 0 auto 24px;
-          background: var(--color-recording);
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 24px;
-          color: white;
-        ">
-          <i class="fas fa-exclamation-triangle"></i>
-        </div>
-        <h2 style="
-          font-size: 24px;
-          font-weight: 600;
-          color: var(--color-text);
-          margin-bottom: 12px;
-          font-family: var(--font-primary);
-        ">Erreur de chargement</h2>
-        <p style="
-          font-size: 14px;
-          color: var(--color-text-secondary);
-          font-family: var(--font-primary);
-        ">Une erreur est survenue lors du chargement de l'application.</p>
-      </div>
-    `;
-  }
-}
-
-async function checkMicrophoneAvailability() {
-  try {
-    // First check if getUserMedia is supported
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      microphoneAvailable = false;
-      updateRecordButtonState();
-      return;
-    }
-
-    // Check if microphones are available
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const audioInputs = devices.filter(device => device.kind === 'audioinput');
-    microphoneAvailable = audioInputs.length > 0;
-
-    // Check permissions if Permissions API is supported
-    if ('permissions' in navigator) {
-      try {
-        const permission = await navigator.permissions.query({ name: 'microphone' as PermissionName });
-        microphonePermission = permission.state;
-        
-        // Listen for permission changes
-        permission.addEventListener('change', () => {
-          microphonePermission = permission.state;
-          updateRecordButtonState();
-        });
-      } catch (permError) {
-        console.warn('Permissions API not fully supported:', permError);
-        // Fallback: try to detect permission by attempting access
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          stream.getTracks().forEach(track => track.stop());
-          microphonePermission = 'granted';
-        } catch (accessError) {
-          if (accessError.name === 'NotAllowedError') {
-            microphonePermission = 'denied';
-          } else {
-            microphonePermission = 'prompt';
-          }
-        }
-      }
-    }
-    
-    updateRecordButtonState();
-  } catch (error) {
-    console.warn('Could not check microphone availability:', error);
-    microphoneAvailable = false;
-    updateRecordButtonState();
-  }
-}
-
-function updateRecordButtonState() {
-  if (!microphoneAvailable) {
-    recordButton.title = 'Aucun microphone détecté';
-    recordButton.style.opacity = '0.5';
-    recordingStatus.textContent = 'No microphone detected';
-  } else if (microphonePermission === 'denied') {
-    recordButton.title = 'Permissions du microphone refusées. Cliquez pour voir les instructions.';
-    recordButton.style.opacity = '0.7';
-    recordingStatus.textContent = 'Microphone access denied';
-  } else if (microphonePermission === 'prompt') {
-    recordButton.title = 'Cliquez pour demander l\'accès au microphone';
-    recordButton.style.opacity = '1';
-    recordingStatus.textContent = 'Click to request microphone access';
-  } else {
-    recordButton.title = 'Start/Stop Recording';
-    recordButton.style.opacity = '1';
-    recordingStatus.textContent = 'Ready to record';
-  }
-}
-
-function showMicrophonePermissionDialog() {
-  const modal = document.createElement('div');
-  modal.className = 'delete-confirmation-modal visible';
-  
-  let content = '';
-  
-  if (!microphoneAvailable) {
-    content = `
-      <div class="delete-confirmation-content">
-        <div class="delete-confirmation-icon">
-          <i class="fas fa-microphone-slash"></i>
-        </div>
-        <h3 class="delete-confirmation-title">Aucun microphone détecté</h3>
-        <p class="delete-confirmation-message">
-          Aucun microphone n'a été détecté sur votre appareil.
-          <br><br>
-          <strong>Solutions possibles :</strong><br>
-          • Connectez un microphone ou un casque avec micro<br>
-          • Vérifiez que votre microphone est bien branché<br>
-          • Redémarrez votre navigateur après avoir connecté le microphone<br>
-          • Vérifiez les paramètres audio de votre système
-        </p>
-        <div class="delete-confirmation-actions">
-          <button class="delete-confirmation-btn cancel" id="permissionOkBtn">Compris</button>
-          <button class="delete-confirmation-btn confirm" id="permissionRetryBtn">Vérifier à nouveau</button>
-        </div>
-      </div>
-    `;
-  } else {
-    content = `
-      <div class="delete-confirmation-content">
-        <div class="delete-confirmation-icon">
-          <i class="fas fa-microphone-slash"></i>
-        </div>
-        <h3 class="delete-confirmation-title">Accès au microphone requis</h3>
-        <p class="delete-confirmation-message">
-          Pour utiliser la fonction d'enregistrement, vous devez autoriser l'accès au microphone.
-          <br><br>
-          <strong>Comment activer le microphone :</strong><br>
-          1. Cliquez sur l'icône de cadenas ou d'information dans la barre d'adresse<br>
-          2. Autorisez l'accès au microphone<br>
-          3. Rechargez la page si nécessaire<br><br>
-          <strong>Ou :</strong><br>
-          • Allez dans les paramètres de votre navigateur<br>
-          • Cherchez "Confidentialité et sécurité" > "Paramètres du site"<br>
-          • Autorisez le microphone pour ce site
-        </p>
-        <div class="delete-confirmation-actions">
-          <button class="delete-confirmation-btn cancel" id="permissionOkBtn">Compris</button>
-          <button class="delete-confirmation-btn confirm" id="permissionRetryBtn">Réessayer</button>
-        </div>
-      </div>
-    `;
-  }
-  
-  modal.innerHTML = content;
   document.body.appendChild(modal);
 
-  const okBtn = modal.querySelector('#permissionOkBtn') as HTMLButtonElement;
-  const retryBtn = modal.querySelector('#permissionRetryBtn') as HTMLButtonElement;
+  const closeBtn = modal.querySelector('#helpCloseBtn') as HTMLButtonElement;
+  const retryBtn = modal.querySelector('#helpRetryBtn') as HTMLButtonElement;
 
-  okBtn.addEventListener('click', () => {
-    document.body.removeChild(modal);
+  closeBtn.addEventListener('click', () => {
+    modal.remove();
   });
 
   retryBtn.addEventListener('click', async () => {
-    document.body.removeChild(modal);
-    if (!microphoneAvailable) {
-      await checkMicrophoneAvailability();
-    } else {
-      await requestMicrophonePermission();
-    }
+    modal.remove();
+    await checkMicrophoneStatus();
   });
 
-  // Close on overlay click
   modal.addEventListener('click', (e) => {
     if (e.target === modal) {
-      document.body.removeChild(modal);
+      modal.remove();
     }
   });
 }
 
-async function requestMicrophonePermission(): Promise<boolean> {
+// Enhanced recording functions
+async function startRecording(): Promise<void> {
   try {
-    // Check if microphone is available first
-    if (!microphoneAvailable) {
-      showMicrophonePermissionDialog();
-      return false;
-    }
-
-    // Try to get user media to trigger permission request
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      } 
-    });
-    
-    // If successful, stop the stream immediately
-    stream.getTracks().forEach(track => track.stop());
-    
-    // Update permission state
-    microphonePermission = 'granted';
-    updateRecordButtonState();
-    
-    return true;
-  } catch (error) {
-    console.error('Microphone permission error:', error);
-    
-    // Handle specific error types
-    if (error.name === 'NotAllowedError') {
-      microphonePermission = 'denied';
-    } else if (error.name === 'NotFoundError') {
-      microphoneAvailable = false;
-    } else if (error.name === 'NotReadableError') {
-      // Microphone is being used by another application
-      alert('Le microphone est déjà utilisé par une autre application. Veuillez fermer les autres applications utilisant le microphone et réessayer.');
-      return false;
-    }
-    
-    updateRecordButtonState();
-    showMicrophonePermissionDialog();
-    
-    return false;
-  }
-}
-
-async function setupAuth() {
-  // Check for existing user
-  currentUser = await AuthService.getCurrentUser();
-  
-  if (currentUser) {
-    console.log('User already authenticated:', currentUser.email);
-    await sessionsList.loadSessions();
-    await pdfList.loadDocuments();
-  } else {
-    authModal.show();
-  }
-
-  // Listen for auth state changes
-  AuthService.onAuthStateChange(async (user) => {
-    currentUser = user;
-    if (user) {
-      console.log('User authenticated:', user.email);
-      authModal.hide();
-      await sessionsList.loadSessions();
-      await pdfList.loadDocuments();
-    } else {
-      console.log('User signed out');
-      authModal.show();
-      // Clear current session
-      currentSession = null;
-      createNewNote();
-    }
-  });
-}
-
-function setupEventListeners() {
-  // Recording controls
-  recordButton.addEventListener('click', toggleRecording);
-  setDurationButton.addEventListener('click', setRecordingDuration);
-  
-  // Audio upload
-  uploadAudioButton.addEventListener('click', () => audioFileUpload.click());
-  audioFileUpload.addEventListener('change', handleAudioUpload);
-  
-  // PDF upload
-  uploadPdfButton.addEventListener('click', () => pdfFileUpload.click());
-  pdfFileUpload.addEventListener('change', handlePdfUpload);
-  
-  // Playback controls
-  playRecordingButton.addEventListener('click', toggleAudioPlayback);
-  playPauseBtn.addEventListener('click', toggleAudioPlayback);
-  stopPlaybackBtn.addEventListener('click', stopAudioPlayback);
-  audioSeeker.addEventListener('input', seekAudio);
-  audioPlayer.addEventListener('timeupdate', updatePlaybackTime);
-  audioPlayer.addEventListener('ended', () => {
-    stopAudioPlayback();
-  });
-  
-  // Action buttons
-  refreshAllButton.addEventListener('click', refreshAllFromRaw);
-  refreshNoteFromSummaryButton.addEventListener('click', refreshNoteFromSummary);
-  copyRawTranscriptionButton.addEventListener('click', () => copyToClipboard(rawTranscription.textContent || ''));
-  copySummaryButton.addEventListener('click', () => copyToClipboard(summaryEditor.textContent || ''));
-  saveSummaryButton.addEventListener('click', () => saveAsFile(summaryEditor.textContent || '', 'resume.txt'));
-  copyDetailedNoteButton.addEventListener('click', () => copyToClipboard(polishedNote.textContent || ''));
-  saveDetailedNoteButton.addEventListener('click', () => saveAsFile(polishedNote.textContent || '', 'note-detaillee.txt'));
-  saveAllButton.addEventListener('click', saveAllAsZip);
-  newButton.addEventListener('click', createNewNote);
-  themeToggleButton.addEventListener('click', toggleTheme);
-  logoutButton.addEventListener('click', handleLogout);
-
-  // Content editing
-  summaryEditor.addEventListener('input', handleSummaryEdit);
-  polishedNote.addEventListener('input', handleNoteEdit);
-  rawTranscription.addEventListener('input', handleRawEdit);
-  editorTitle.addEventListener('input', handleTitleEdit);
-
-  // Placeholder management
-  setupPlaceholderManagement();
-}
-
-function setupPlaceholderManagement() {
-  const editableElements = [summaryEditor, polishedNote, rawTranscription];
-  
-  editableElements.forEach(element => {
-    element.addEventListener('focus', () => {
-      if (element.textContent?.trim() === '' || element.classList.contains('placeholder-active')) {
-        element.textContent = '';
-        element.classList.remove('placeholder-active');
-      }
-    });
-    
-    element.addEventListener('blur', () => {
-      if (element.textContent?.trim() === '') {
-        element.classList.add('placeholder-active');
-        element.textContent = element.getAttribute('placeholder') || '';
-      }
-    });
-    
-    // Initialize placeholder state
-    if (element.textContent?.trim() === '') {
-      element.classList.add('placeholder-active');
-      element.textContent = element.getAttribute('placeholder') || '';
-    }
-  });
-}
-
-function setupTabNavigation() {
-  tabButtons.forEach((button, index) => {
-    button.addEventListener('click', () => {
-      // Remove active class from all tabs and contents
-      tabButtons.forEach(btn => btn.classList.remove('active'));
-      noteContents.forEach(content => content.classList.remove('active'));
-      
-      // Add active class to clicked tab and corresponding content
-      button.classList.add('active');
-      noteContents[index].classList.add('active');
-      
-      // Update indicator position
-      updateTabIndicator(button as HTMLElement);
-    });
-  });
-  
-  // Initialize indicator position
-  const activeTab = document.querySelector('.tab-button.active') as HTMLElement;
-  if (activeTab) {
-    updateTabIndicator(activeTab);
-  }
-}
-
-function updateTabIndicator(activeTab: HTMLElement) {
-  const tabNavigation = activeTab.parentElement as HTMLElement;
-  const indicator = activeTabIndicator;
-  
-  const tabRect = activeTab.getBoundingClientRect();
-  const navRect = tabNavigation.getBoundingClientRect();
-  
-  const left = tabRect.left - navRect.left;
-  const width = tabRect.width;
-  
-  indicator.style.left = `${left}px`;
-  indicator.style.width = `${width}px`;
-}
-
-function initializeTheme() {
-  const savedTheme = localStorage.getItem('theme');
-  if (savedTheme === 'light') {
-    isDarkMode = false;
-    document.body.classList.add('light-mode');
-    themeToggleButton.innerHTML = '<i class="fas fa-moon"></i>';
-  }
-}
-
-function toggleTheme() {
-  isDarkMode = !isDarkMode;
-  document.body.classList.toggle('light-mode');
-  
-  if (isDarkMode) {
-    themeToggleButton.innerHTML = '<i class="fas fa-sun"></i>';
-    localStorage.setItem('theme', 'dark');
-  } else {
-    themeToggleButton.innerHTML = '<i class="fas fa-moon"></i>';
-    localStorage.setItem('theme', 'light');
-  }
-}
-
-function createNewNote() {
-  // Clear current session
-  currentSession = null;
-  
-  // Reset all content
-  editorTitle.textContent = 'Nouvelle Note';
-  rawTranscription.textContent = '';
-  summaryEditor.textContent = '';
-  polishedNote.textContent = '';
-  
-  // Reset placeholder states
-  rawTranscription.classList.add('placeholder-active');
-  rawTranscription.textContent = rawTranscription.getAttribute('placeholder') || '';
-  
-  summaryEditor.classList.add('placeholder-active');
-  summaryEditor.textContent = summaryEditor.getAttribute('placeholder') || '';
-  
-  polishedNote.classList.add('placeholder-active');
-  polishedNote.textContent = polishedNote.getAttribute('placeholder') || '';
-  
-  // Hide audio controls
-  hideAudioControls();
-  
-  // Reset recording interface
-  resetRecordingInterface();
-  
-  // Switch to summary tab
-  const summaryTab = document.querySelector('[data-tab="summary"]') as HTMLElement;
-  if (summaryTab) {
-    summaryTab.click();
-  }
-  
-  console.log('Created new note');
-}
-
-async function loadSession(session: DictationSession) {
-  currentSession = session;
-  
-  // Update UI with session data
-  editorTitle.textContent = session.title;
-  
-  // Load content and remove placeholder states
-  if (session.raw_transcription) {
-    rawTranscription.textContent = session.raw_transcription;
-    rawTranscription.classList.remove('placeholder-active');
-  } else {
-    rawTranscription.classList.add('placeholder-active');
-    rawTranscription.textContent = rawTranscription.getAttribute('placeholder') || '';
-  }
-  
-  if (session.summary) {
-    summaryEditor.textContent = session.summary;
-    summaryEditor.classList.remove('placeholder-active');
-  } else {
-    summaryEditor.classList.add('placeholder-active');
-    summaryEditor.textContent = summaryEditor.getAttribute('placeholder') || '';
-  }
-  
-  if (session.detailed_note) {
-    polishedNote.textContent = session.detailed_note;
-    polishedNote.classList.remove('placeholder-active');
-  } else {
-    polishedNote.classList.add('placeholder-active');
-    polishedNote.textContent = polishedNote.getAttribute('placeholder') || '';
-  }
-  
-  // Load audio if available
-  if (session.audio_file_path) {
-    try {
-      const audioUrl = await StorageService.getAudioFileUrl(session.audio_file_path);
-      if (audioUrl) {
-        setupAudioPlayback(audioUrl, session.title);
-      }
-    } catch (error) {
-      console.error('Error loading audio:', error);
-    }
-  } else {
-    hideAudioControls();
-  }
-  
-  console.log('Loaded session:', session.title);
-}
-
-async function toggleRecording() {
-  if (!currentUser) {
-    alert('Veuillez vous connecter pour enregistrer');
-    return;
-  }
-
-  if (isRecording) {
-    await stopRecording();
-  } else {
-    await startRecording();
-  }
-}
-
-async function startRecording() {
-  try {
-    // Check microphone availability first
-    if (!microphoneAvailable) {
-      showMicrophonePermissionDialog();
+    // Check microphone status first
+    if (!microphoneStatus.available) {
+      showMicrophoneHelp();
       return;
     }
 
-    // Check microphone permission
-    if (microphonePermission === 'denied') {
-      showMicrophonePermissionDialog();
-      return;
-    }
-    
-    // Create a new note for each recording
-    createNewNote();
-    
-    // Request microphone access
-    const hasPermission = await requestMicrophonePermission();
-    if (!hasPermission) {
-      return;
-    }
-    
-    const stream = await navigator.mediaDevices.getUserMedia({ 
+    // Get user media with enhanced constraints
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
-        sampleRate: 44100
-      } 
+        sampleRate: 44100,
+        channelCount: 1
+      }
     });
+
+    // Setup audio context for waveform visualization
+    audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(stream);
+    source.connect(analyser);
     
-    // Set up audio context for visualization
-    setupAudioVisualization(stream);
-    
-    mediaRecorder = new MediaRecorder(stream, {
+    analyser.fftSize = 256;
+    const bufferLength = analyser.frequencyBinCount;
+    dataArray = new Uint8Array(bufferLength);
+
+    // Setup MediaRecorder
+    const options: MediaRecorderOptions = {
       mimeType: 'audio/webm;codecs=opus'
-    });
-    
+    };
+
+    // Fallback for browsers that don't support webm
+    if (!MediaRecorder.isTypeSupported(options.mimeType!)) {
+      options.mimeType = 'audio/mp4';
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options.mimeType = 'audio/wav';
+      }
+    }
+
+    mediaRecorder = new MediaRecorder(stream, options);
     audioChunks = [];
-    recordingStartTime = Date.now();
-    
+
     mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
         audioChunks.push(event.data);
       }
     };
-    
+
     mediaRecorder.onstop = async () => {
-      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-      await processRecording(audioBlob);
+      const audioBlob = new Blob(audioChunks, { type: mediaRecorder?.mimeType || 'audio/webm' });
+      currentAudioBlob = audioBlob;
       
       // Stop all tracks
       stream.getTracks().forEach(track => track.stop());
@@ -791,269 +312,250 @@ async function startRecording() {
         audioContext.close();
         audioContext = null;
       }
+
+      // Process the recording
+      await processRecording(audioBlob);
     };
-    
+
+    mediaRecorder.onerror = (event) => {
+      console.error('MediaRecorder error:', event);
+      stopRecording();
+      alert('Erreur lors de l\'enregistrement. Veuillez réessayer.');
+    };
+
+    // Start recording
     mediaRecorder.start(1000); // Collect data every second
-    isRecording = true;
+    recordingStartTime = Date.now();
     
-    // Update UI for live recording
+    // Update UI
     updateRecordingUI(true);
     startRecordingTimer();
-    
-    // Set auto-stop timer
+    startLiveWaveform();
+
+    // Auto-stop after max duration
     setTimeout(() => {
-      if (isRecording) {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
         stopRecording();
       }
     }, maxRecordingTime);
-    
-  } catch (error) {
+
+  } catch (error: any) {
     console.error('Error starting recording:', error);
     
-    // More specific error handling
-    if (error.name === 'NotAllowedError') {
-      microphonePermission = 'denied';
-      updateRecordButtonState();
-      showMicrophonePermissionDialog();
-    } else if (error.name === 'NotFoundError') {
-      microphoneAvailable = false;
-      updateRecordButtonState();
-      showMicrophonePermissionDialog();
-    } else if (error.name === 'NotReadableError') {
-      alert('Le microphone est déjà utilisé par une autre application. Veuillez fermer les autres applications utilisant le microphone et réessayer.');
-    } else if (error.name === 'OverconstrainedError') {
-      alert('Les paramètres audio demandés ne sont pas supportés par votre microphone. Veuillez essayer avec un autre microphone.');
+    // Update microphone status and show help
+    await checkMicrophoneStatus();
+    
+    if (!microphoneStatus.available) {
+      showMicrophoneHelp();
     } else {
-      alert('Erreur lors du démarrage de l\'enregistrement. Vérifiez que votre microphone fonctionne correctement.');
+      alert(`Erreur lors du démarrage de l'enregistrement: ${error.message}`);
     }
   }
 }
 
-async function stopRecording() {
-  if (mediaRecorder && isRecording) {
+function stopRecording(): void {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
     mediaRecorder.stop();
-    isRecording = false;
-    
-    // Update UI
-    updateRecordingUI(false);
-    stopRecordingTimer();
-    
-    // Stop visualization
-    if (animationId) {
-      cancelAnimationFrame(animationId);
-      animationId = null;
-    }
-  }
-}
-
-function setupAudioVisualization(stream: MediaStream) {
-  audioContext = new AudioContext();
-  analyser = audioContext.createAnalyser();
-  const source = audioContext.createMediaStreamSource(stream);
-  
-  analyser.fftSize = 256;
-  const bufferLength = analyser.frequencyBinCount;
-  dataArray = new Uint8Array(bufferLength);
-  
-  source.connect(analyser);
-  
-  drawWaveform();
-}
-
-function drawWaveform() {
-  if (!analyser || !dataArray) return;
-  
-  const canvas = liveWaveformCanvas;
-  const ctx = canvas.getContext('2d')!;
-  
-  // Set canvas size
-  canvas.width = canvas.offsetWidth * window.devicePixelRatio;
-  canvas.height = canvas.offsetHeight * window.devicePixelRatio;
-  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-  
-  const width = canvas.offsetWidth;
-  const height = canvas.offsetHeight;
-  
-  analyser.getByteFrequencyData(dataArray);
-  
-  ctx.fillStyle = 'transparent';
-  ctx.fillRect(0, 0, width, height);
-  
-  const barWidth = (width / dataArray.length) * 2.5;
-  let barHeight;
-  let x = 0;
-  
-  const gradient = ctx.createLinearGradient(0, height, 0, 0);
-  gradient.addColorStop(0, 'var(--color-accent)');
-  gradient.addColorStop(1, 'var(--color-accent-alt)');
-  
-  for (let i = 0; i < dataArray.length; i++) {
-    barHeight = (dataArray[i] / 255) * height * 0.8;
-    
-    ctx.fillStyle = gradient;
-    ctx.fillRect(x, height - barHeight, barWidth, barHeight);
-    
-    x += barWidth + 1;
   }
   
-  animationId = requestAnimationFrame(drawWaveform);
+  updateRecordingUI(false);
+  stopRecordingTimer();
+  stopLiveWaveform();
 }
 
-function updateRecordingUI(recording: boolean) {
+function updateRecordingUI(isRecording: boolean): void {
+  const recordButton = document.getElementById('recordButton') as HTMLButtonElement;
   const recordingInterface = document.querySelector('.recording-interface') as HTMLElement;
-  
-  if (recording) {
+  const liveTitle = document.getElementById('liveRecordingTitle') as HTMLElement;
+  const liveCanvas = document.getElementById('liveWaveformCanvas') as HTMLCanvasElement;
+  const liveTimer = document.getElementById('liveRecordingTimerDisplay') as HTMLElement;
+
+  if (isRecording) {
     recordButton.classList.add('recording');
     recordingInterface.classList.add('is-live');
     
-    // Show live recording elements
-    liveRecordingTitle.style.display = 'block';
-    liveWaveformCanvas.style.display = 'block';
-    liveRecordingTimerDisplay.style.display = 'block';
-    
-    recordingStatus.textContent = 'Recording...';
+    if (liveTitle) {
+      liveTitle.style.display = 'block';
+      liveTitle.textContent = 'Enregistrement en cours...';
+    }
+    if (liveCanvas) liveCanvas.style.display = 'block';
+    if (liveTimer) liveTimer.style.display = 'block';
   } else {
     recordButton.classList.remove('recording');
     recordingInterface.classList.remove('is-live');
     
-    // Hide live recording elements
-    liveRecordingTitle.style.display = 'none';
-    liveWaveformCanvas.style.display = 'none';
-    liveRecordingTimerDisplay.style.display = 'none';
-    
-    recordingStatus.textContent = 'Processing...';
+    if (liveTitle) liveTitle.style.display = 'none';
+    if (liveCanvas) liveCanvas.style.display = 'none';
+    if (liveTimer) liveTimer.style.display = 'none';
   }
 }
 
-function startRecordingTimer() {
-  recordingTimer = setInterval(() => {
+function startRecordingTimer(): void {
+  const timerDisplay = document.getElementById('liveRecordingTimerDisplay') as HTMLElement;
+  
+  recordingTimer = window.setInterval(() => {
     const elapsed = Date.now() - recordingStartTime;
     const minutes = Math.floor(elapsed / 60000);
     const seconds = Math.floor((elapsed % 60000) / 1000);
     const centiseconds = Math.floor((elapsed % 1000) / 10);
     
-    liveRecordingTimerDisplay.textContent = 
-      `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${centiseconds.toString().padStart(2, '0')}`;
+    if (timerDisplay) {
+      timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${centiseconds.toString().padStart(2, '0')}`;
+    }
+    
+    // Auto-stop if max duration reached
+    if (elapsed >= maxRecordingTime) {
+      stopRecording();
+    }
   }, 10);
 }
 
-function stopRecordingTimer() {
+function stopRecordingTimer(): void {
   if (recordingTimer) {
     clearInterval(recordingTimer);
     recordingTimer = null;
   }
 }
 
-async function processRecording(audioBlob: Blob) {
-  if (!currentUser) return;
-  
+function startLiveWaveform(): void {
+  const canvas = document.getElementById('liveWaveformCanvas') as HTMLCanvasElement;
+  if (!canvas || !analyser || !dataArray) return;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const draw = () => {
+    if (!analyser || !dataArray) return;
+
+    liveWaveformAnimationId = requestAnimationFrame(draw);
+
+    analyser.getByteFrequencyData(dataArray);
+
+    ctx.fillStyle = 'rgba(18, 18, 18, 0.3)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const barWidth = (canvas.width / dataArray.length) * 2.5;
+    let barHeight;
+    let x = 0;
+
+    for (let i = 0; i < dataArray.length; i++) {
+      barHeight = (dataArray[i] / 255) * canvas.height * 0.8;
+
+      const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+      gradient.addColorStop(0, '#82aaff');
+      gradient.addColorStop(1, '#c792ea');
+
+      ctx.fillStyle = gradient;
+      ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+
+      x += barWidth + 1;
+    }
+  };
+
+  draw();
+}
+
+function stopLiveWaveform(): void {
+  if (liveWaveformAnimationId) {
+    cancelAnimationFrame(liveWaveformAnimationId);
+    liveWaveformAnimationId = null;
+  }
+}
+
+async function processRecording(audioBlob: Blob): Promise<void> {
+  if (!currentUser) {
+    console.error('No user logged in');
+    return;
+  }
+
   const recordingDurationMs = Date.now() - recordingStartTime;
   const recordingDurationSeconds = Math.floor(recordingDurationMs / 1000);
-  
+
   // Show transcription progress
   transcriptionProgress.show(() => {
     // Cancel callback - could implement cancellation logic here
     console.log('Transcription cancelled by user');
   });
-  
+
   try {
-    // Step 1: Create session in database
+    // Step 1: Create session
     transcriptionProgress.setStep(0, 'Création de la session...');
     
-    currentSession = await DatabaseService.createSession({
+    const sessionData: Partial<DictationSession> = {
       user_id: currentUser.id,
-      title: 'Nouvel Enregistrement',
+      title: 'Nouvel enregistrement',
+      recording_duration: recordingDurationSeconds,
       raw_transcription: '',
       summary: '',
-      detailed_note: '',
-      recording_duration: recordingDurationSeconds
-    });
-    
-    if (!currentSession) {
+      detailed_note: ''
+    };
+
+    const session = await DatabaseService.createSession(sessionData);
+    if (!session) {
       throw new Error('Impossible de créer la session');
     }
-    
+
+    currentSessionId = session.id;
+
     // Step 2: Upload audio file
     transcriptionProgress.setStep(1, 'Téléversement de l\'audio...');
     
-    const audioFile = new File([audioBlob], `recording-${currentSession.id}.webm`, { type: 'audio/webm' });
-    const audioPath = await StorageService.uploadAudioFile(audioFile, currentUser.id, currentSession.id);
+    const audioFile = new File([audioBlob], `recording-${session.id}.webm`, { type: audioBlob.type });
+    const audioPath = await StorageService.uploadAudioFile(audioFile, currentUser.id, session.id);
     
     if (!audioPath) {
-      throw new Error('Impossible de téléverser l\'audio');
+      throw new Error('Impossible de téléverser le fichier audio');
     }
-    
+
     // Update session with audio path
-    await DatabaseService.updateSession(currentSession.id, { audio_file_path: audioPath });
-    
+    await DatabaseService.updateSession(session.id, { audio_file_path: audioPath });
+
     // Step 3: Transcribe audio
     transcriptionProgress.setStep(2, 'Transcription par IA...');
     
     const transcription = await transcribeAudio(audioBlob);
-    
     if (!transcription) {
       throw new Error('Impossible de transcrire l\'audio');
     }
-    
+
     // Step 4: Generate title
     transcriptionProgress.setStep(3, 'Génération du titre...');
     
     const title = await generateTitle(transcription);
-    
+
     // Step 5: Generate summary
     transcriptionProgress.setStep(4, 'Création du résumé...');
     
     const summary = await generateSummary(transcription);
-    
+
     // Step 6: Generate detailed note
     transcriptionProgress.setStep(5, 'Rédaction de la note détaillée...');
     
     const detailedNote = await generateDetailedNote(transcription);
-    
+
     // Update session with all generated content
-    currentSession = await DatabaseService.updateSession(currentSession.id, {
-      title: title || 'Enregistrement',
+    const updatedSession = await DatabaseService.updateSession(session.id, {
+      title: title || 'Enregistrement sans titre',
       raw_transcription: transcription,
-      summary: summary,
-      detailed_note: detailedNote
+      summary: summary || '',
+      detailed_note: detailedNote || ''
     });
-    
-    if (currentSession) {
-      // Update UI
-      editorTitle.textContent = currentSession.title;
-      
-      rawTranscription.textContent = transcription;
-      rawTranscription.classList.remove('placeholder-active');
-      
-      summaryEditor.textContent = summary;
-      summaryEditor.classList.remove('placeholder-active');
-      
-      polishedNote.textContent = detailedNote;
-      polishedNote.classList.remove('placeholder-active');
-      
-      // Set up audio playback
-      const audioUrl = await StorageService.getAudioFileUrl(audioPath);
-      if (audioUrl) {
-        setupAudioPlayback(audioUrl, currentSession.title);
-      }
+
+    if (updatedSession) {
+      // Load the session into the UI
+      loadSessionIntoUI(updatedSession);
       
       // Refresh sessions list
       await sessionsList.loadSessions();
+      
+      transcriptionProgress.setSuccess('Enregistrement traité avec succès !');
+    } else {
+      throw new Error('Impossible de sauvegarder les résultats');
     }
-    
-    transcriptionProgress.setSuccess('Enregistrement traité avec succès !');
-    
+
   } catch (error) {
     console.error('Error processing recording:', error);
-    transcriptionProgress.setError('Erreur lors du traitement de l\'enregistrement');
-    
-    // Clean up failed session
-    if (currentSession) {
-      await DatabaseService.deleteSession(currentSession.id);
-      currentSession = null;
-    }
-  } finally {
-    recordingStatus.textContent = 'Ready to record';
+    transcriptionProgress.setError(`Erreur lors du traitement: ${error instanceof Error ? error.message : 'Erreur inconnue'}`);
   }
 }
 
@@ -1061,23 +563,23 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     
-    // Convert blob to base64
     const arrayBuffer = await audioBlob.arrayBuffer();
     const base64Audio = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
     
     const result = await model.generateContent([
       {
         inlineData: {
-          mimeType: "audio/webm",
-          data: base64Audio
+          data: base64Audio,
+          mimeType: audioBlob.type
         }
       },
       "Transcris fidèlement cet enregistrement audio en français. Retourne uniquement le texte transcrit, sans commentaires ni formatage."
     ]);
     
-    return result.response.text().trim();
+    const response = await result.response;
+    return response.text().trim();
   } catch (error) {
-    console.error('Error transcribing audio:', error);
+    console.error('Transcription error:', error);
     throw new Error('Erreur lors de la transcription');
   }
 }
@@ -1086,17 +588,18 @@ async function generateTitle(transcription: string): Promise<string> {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     
-    const prompt = `Génère un titre court et descriptif (maximum 50 caractères) pour cette transcription :
+    const prompt = `Génère un titre court et descriptif (maximum 60 caractères) pour cette transcription :
 
 ${transcription}
 
 Retourne uniquement le titre, sans guillemets ni formatage.`;
-    
+
     const result = await model.generateContent(prompt);
-    return result.response.text().trim();
+    const response = await result.response;
+    return response.text().trim();
   } catch (error) {
-    console.error('Error generating title:', error);
-    return 'Enregistrement';
+    console.error('Title generation error:', error);
+    return 'Enregistrement sans titre';
   }
 }
 
@@ -1110,18 +613,18 @@ ${transcription}
 
 Le résumé doit :
 - Être en français
-- Capturer les points clés et idées principales
-- Être organisé avec des puces ou des paragraphes courts
-- Faire environ 100-200 mots
-- Être facilement modifiable par l'utilisateur
+- Faire 3-5 phrases maximum
+- Capturer les points clés
+- Être rédigé de manière professionnelle
 
-Retourne uniquement le résumé, sans titre ni introduction.`;
-    
+Retourne uniquement le résumé.`;
+
     const result = await model.generateContent(prompt);
-    return result.response.text().trim();
+    const response = await result.response;
+    return response.text().trim();
   } catch (error) {
-    console.error('Error generating summary:', error);
-    return 'Erreur lors de la génération du résumé';
+    console.error('Summary generation error:', error);
+    return '';
   }
 }
 
@@ -1135,438 +638,345 @@ ${transcription}
 
 La note doit :
 - Être en français
-- Avoir une structure claire avec des titres et sous-titres
-- Développer les idées principales avec des détails
-- Être bien formatée et professionnelle
-- Inclure tous les points importants de la transcription
-- Être facilement modifiable par l'utilisateur
+- Être bien organisée avec des titres et sous-titres
+- Corriger les erreurs grammaticales
+- Améliorer la clarté et la lisibilité
+- Conserver toutes les informations importantes
+- Utiliser le formatage Markdown
 
-Utilise un formatage markdown simple (titres avec #, listes avec -, etc.).`;
-    
+Retourne uniquement la note formatée.`;
+
     const result = await model.generateContent(prompt);
-    return result.response.text().trim();
+    const response = await result.response;
+    return response.text().trim();
   } catch (error) {
-    console.error('Error generating detailed note:', error);
-    return 'Erreur lors de la génération de la note détaillée';
+    console.error('Detailed note generation error:', error);
+    return '';
   }
 }
 
-function setRecordingDuration() {
-  const duration = parseInt(durationInput.value);
-  if (duration >= 1 && duration <= 120) {
-    recordingDuration = duration;
-    maxRecordingTime = duration * 60 * 1000;
-    alert(`Durée d'enregistrement définie à ${duration} minute(s)`);
-  } else {
-    alert('Veuillez entrer une durée entre 1 et 120 minutes');
+function loadSessionIntoUI(session: DictationSession): void {
+  // Update title
+  const titleElement = document.querySelector('.editor-title') as HTMLElement;
+  if (titleElement) {
+    titleElement.textContent = session.title;
   }
+
+  // Update content areas
+  const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+  const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+  const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
+
+  if (summaryEditor) {
+    summaryEditor.innerHTML = marked.parse(session.summary || '');
+  }
+  if (polishedNote) {
+    polishedNote.innerHTML = marked.parse(session.detailed_note || '');
+  }
+  if (rawTranscription) {
+    rawTranscription.textContent = session.raw_transcription || '';
+  }
+
+  // Show audio playback if available
+  if (session.audio_file_path) {
+    showAudioPlayback(session.audio_file_path, session.title);
+  }
+
+  currentSessionId = session.id;
 }
 
-async function handleAudioUpload(event: Event) {
-  if (!currentUser) {
-    alert('Veuillez vous connecter pour téléverser un fichier audio');
-    return;
-  }
-
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  
-  if (!file) return;
-  
-  // Create a new note for the uploaded audio
-  createNewNote();
-  
-  // Show transcription progress
-  transcriptionProgress.show();
-  
+async function showAudioPlayback(audioPath: string, title: string): Promise<void> {
   try {
-    // Step 1: Create session
-    transcriptionProgress.setStep(0, 'Création de la session...');
-    
-    currentSession = await DatabaseService.createSession({
+    const audioUrl = await StorageService.getAudioFileUrl(audioPath);
+    if (!audioUrl) return;
+
+    const playbackControls = document.getElementById('audioPlaybackControls') as HTMLElement;
+    const audioPlayer = document.getElementById('audioPlayer') as HTMLAudioElement;
+    const playbackTitle = document.getElementById('playbackTitle') as HTMLElement;
+    const recordingInterface = document.querySelector('.recording-interface') as HTMLElement;
+
+    if (playbackControls && audioPlayer && playbackTitle && recordingInterface) {
+      audioPlayer.src = audioUrl;
+      playbackTitle.textContent = `Lecture: ${title}`;
+      playbackControls.style.display = 'block';
+      recordingInterface.classList.add('is-playback');
+    }
+  } catch (error) {
+    console.error('Error setting up audio playback:', error);
+  }
+}
+
+// Audio playback controls
+function setupAudioPlayback(): void {
+  const playPauseBtn = document.getElementById('playPauseBtn') as HTMLButtonElement;
+  const stopPlaybackBtn = document.getElementById('stopPlaybackBtn') as HTMLButtonElement;
+  const audioSeeker = document.getElementById('audioSeeker') as HTMLInputElement;
+  const audioPlayer = document.getElementById('audioPlayer') as HTMLAudioElement;
+  const playbackTime = document.getElementById('playbackTime') as HTMLElement;
+
+  if (!playPauseBtn || !stopPlaybackBtn || !audioSeeker || !audioPlayer || !playbackTime) return;
+
+  playPauseBtn.addEventListener('click', () => {
+    if (audioPlayer.paused) {
+      audioPlayer.play();
+      playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
+      playPauseBtn.classList.add('playing');
+    } else {
+      audioPlayer.pause();
+      playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+      playPauseBtn.classList.remove('playing');
+    }
+  });
+
+  stopPlaybackBtn.addEventListener('click', () => {
+    audioPlayer.pause();
+    audioPlayer.currentTime = 0;
+    playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+    playPauseBtn.classList.remove('playing');
+    hideAudioPlayback();
+  });
+
+  audioSeeker.addEventListener('input', () => {
+    const seekTime = (parseFloat(audioSeeker.value) / 100) * audioPlayer.duration;
+    audioPlayer.currentTime = seekTime;
+  });
+
+  audioPlayer.addEventListener('timeupdate', () => {
+    if (audioPlayer.duration) {
+      const progress = (audioPlayer.currentTime / audioPlayer.duration) * 100;
+      audioSeeker.value = progress.toString();
+      
+      const currentTime = formatTime(audioPlayer.currentTime);
+      const totalTime = formatTime(audioPlayer.duration);
+      playbackTime.textContent = `${currentTime} / ${totalTime}`;
+    }
+  });
+
+  audioPlayer.addEventListener('ended', () => {
+    playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+    playPauseBtn.classList.remove('playing');
+    audioSeeker.value = '0';
+  });
+}
+
+function hideAudioPlayback(): void {
+  const playbackControls = document.getElementById('audioPlaybackControls') as HTMLElement;
+  const recordingInterface = document.querySelector('.recording-interface') as HTMLElement;
+
+  if (playbackControls) {
+    playbackControls.style.display = 'none';
+  }
+  if (recordingInterface) {
+    recordingInterface.classList.remove('is-playback');
+  }
+}
+
+function formatTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+// File upload handlers
+async function handleAudioUpload(file: File): Promise<void> {
+  if (!currentUser) return;
+
+  transcriptionProgress.show();
+
+  try {
+    transcriptionProgress.setStep(0, 'Traitement du fichier audio...');
+
+    // Create session
+    const sessionData: Partial<DictationSession> = {
       user_id: currentUser.id,
-      title: file.name.replace(/\.[^/.]+$/, ""), // Remove file extension
+      title: file.name.replace(/\.[^/.]+$/, ''),
+      recording_duration: 0,
       raw_transcription: '',
       summary: '',
-      detailed_note: '',
-      recording_duration: 0 // Will be updated after processing
-    });
-    
-    if (!currentSession) {
+      detailed_note: ''
+    };
+
+    const session = await DatabaseService.createSession(sessionData);
+    if (!session) {
       throw new Error('Impossible de créer la session');
     }
-    
-    // Step 2: Upload file
+
+    currentSessionId = session.id;
+
+    // Upload file
     transcriptionProgress.setStep(1, 'Téléversement du fichier...');
-    
-    const audioPath = await StorageService.uploadAudioFile(file, currentUser.id, currentSession.id);
-    
+    const audioPath = await StorageService.uploadAudioFile(file, currentUser.id, session.id);
     if (!audioPath) {
       throw new Error('Impossible de téléverser le fichier');
     }
-    
-    await DatabaseService.updateSession(currentSession.id, { audio_file_path: audioPath });
-    
-    // Step 3: Transcribe
+
+    await DatabaseService.updateSession(session.id, { audio_file_path: audioPath });
+
+    // Process audio
     transcriptionProgress.setStep(2, 'Transcription par IA...');
-    
     const transcription = await transcribeAudio(file);
     
-    // Step 4: Generate title
     transcriptionProgress.setStep(3, 'Génération du titre...');
-    
     const title = await generateTitle(transcription);
     
-    // Step 5: Generate summary
     transcriptionProgress.setStep(4, 'Création du résumé...');
-    
     const summary = await generateSummary(transcription);
     
-    // Step 6: Generate detailed note
     transcriptionProgress.setStep(5, 'Rédaction de la note détaillée...');
-    
     const detailedNote = await generateDetailedNote(transcription);
-    
-    // Update session
-    currentSession = await DatabaseService.updateSession(currentSession.id, {
-      title: title || file.name,
+
+    const updatedSession = await DatabaseService.updateSession(session.id, {
+      title: title || file.name.replace(/\.[^/.]+$/, ''),
       raw_transcription: transcription,
-      summary: summary,
-      detailed_note: detailedNote
+      summary: summary || '',
+      detailed_note: detailedNote || ''
     });
-    
-    if (currentSession) {
-      // Update UI
-      editorTitle.textContent = currentSession.title;
-      
-      rawTranscription.textContent = transcription;
-      rawTranscription.classList.remove('placeholder-active');
-      
-      summaryEditor.textContent = summary;
-      summaryEditor.classList.remove('placeholder-active');
-      
-      polishedNote.textContent = detailedNote;
-      polishedNote.classList.remove('placeholder-active');
-      
-      // Set up audio playback
-      const audioUrl = await StorageService.getAudioFileUrl(audioPath);
-      if (audioUrl) {
-        setupAudioPlayback(audioUrl, currentSession.title);
-      }
-      
-      // Refresh sessions list
+
+    if (updatedSession) {
+      loadSessionIntoUI(updatedSession);
       await sessionsList.loadSessions();
+      transcriptionProgress.setSuccess('Fichier audio traité avec succès !');
     }
-    
-    transcriptionProgress.setSuccess('Fichier audio traité avec succès !');
-    
+
   } catch (error) {
-    console.error('Error processing uploaded audio:', error);
-    transcriptionProgress.setError('Erreur lors du traitement du fichier audio');
-    
-    // Clean up failed session
-    if (currentSession) {
-      await DatabaseService.deleteSession(currentSession.id);
-      currentSession = null;
-    }
+    console.error('Error processing audio file:', error);
+    transcriptionProgress.setError(`Erreur: ${error instanceof Error ? error.message : 'Erreur inconnue'}`);
   }
-  
-  // Clear input
-  input.value = '';
 }
 
-async function handlePdfUpload(event: Event) {
-  if (!currentUser) {
-    alert('Veuillez vous connecter pour téléverser un PDF');
-    return;
-  }
+async function handlePdfUpload(file: File): Promise<void> {
+  if (!currentUser) return;
 
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  
-  if (!file) return;
-  
   try {
     // Extract text from PDF
     const extractedText = await PdfService.extractTextFromPdf(file);
     
     // Upload PDF file
-    const filePath = await PdfService.uploadPdfFile(file, currentUser.id, currentSession?.id);
-    
+    const filePath = await PdfService.uploadPdfFile(file, currentUser.id, currentSessionId || undefined);
     if (!filePath) {
-      throw new Error('Impossible de téléverser le PDF');
+      throw new Error('Impossible de téléverser le fichier PDF');
     }
-    
+
+    // Get PDF info
+    const pdfDoc = await (window as any).pdfjsLib.getDocument(await file.arrayBuffer()).promise;
+    const pageCount = pdfDoc.numPages;
+
     // Create PDF document record
-    const pdfDocument = await PdfService.createPdfDocument({
-      session_id: currentSession?.id,
+    const pdfDocument: Partial<PdfDocument> = {
+      session_id: currentSessionId || undefined,
       user_id: currentUser.id,
-      title: file.name,
+      title: file.name.replace(/\.[^/.]+$/, ''),
       file_path: filePath,
       file_size: file.size,
-      page_count: 1, // Will be updated if we can get actual page count
+      page_count: pageCount,
       extracted_text: extractedText
-    });
-    
-    if (pdfDocument) {
-      alert('PDF téléversé avec succès !');
+    };
+
+    const createdDoc = await PdfService.createPdfDocument(pdfDocument);
+    if (createdDoc) {
       await pdfList.loadDocuments();
+      alert('PDF téléversé avec succès !');
     }
-    
+
   } catch (error) {
     console.error('Error uploading PDF:', error);
-    alert('Erreur lors du téléversement du PDF');
+    alert(`Erreur lors du téléversement du PDF: ${error instanceof Error ? error.message : 'Erreur inconnue'}`);
   }
-  
-  // Clear input
-  input.value = '';
 }
 
-function setupAudioPlayback(audioUrl: string, title: string) {
-  audioPlayer.src = audioUrl;
-  playbackTitle.textContent = `Lecture - ${title}`;
-  
-  // Show playback controls
-  audioPlaybackControls.style.display = 'block';
-  playRecordingButton.style.display = 'block';
-  
-  // Update recording interface state
-  const recordingInterface = document.querySelector('.recording-interface') as HTMLElement;
-  recordingInterface.classList.add('is-playback');
-  
-  // Load metadata
-  audioPlayer.addEventListener('loadedmetadata', () => {
-    audioSeeker.max = audioPlayer.duration.toString();
-    updatePlaybackTime();
-  });
+// Utility functions
+function clearCurrentNote(): void {
+  const titleElement = document.querySelector('.editor-title') as HTMLElement;
+  const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+  const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+  const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
+
+  if (titleElement) titleElement.textContent = 'Untitled Note';
+  if (summaryEditor) summaryEditor.innerHTML = '';
+  if (polishedNote) polishedNote.innerHTML = '';
+  if (rawTranscription) rawTranscription.textContent = '';
+
+  currentSessionId = null;
+  currentAudioBlob = null;
+  hideAudioPlayback();
 }
 
-function hideAudioControls() {
-  audioPlaybackControls.style.display = 'none';
-  playRecordingButton.style.display = 'none';
+function toggleTheme(): void {
+  document.body.classList.toggle('light-mode');
+  const themeButton = document.getElementById('themeToggleButton') as HTMLButtonElement;
+  const icon = themeButton.querySelector('i') as HTMLElement;
   
-  const recordingInterface = document.querySelector('.recording-interface') as HTMLElement;
-  recordingInterface.classList.remove('is-playback');
-  
-  if (currentAudio) {
-    currentAudio.pause();
-    currentAudio = null;
-  }
-  isPlaying = false;
-}
-
-function resetRecordingInterface() {
-  const recordingInterface = document.querySelector('.recording-interface') as HTMLElement;
-  recordingInterface.classList.remove('is-live', 'is-playback');
-  recordingStatus.textContent = 'Ready to record';
-}
-
-function toggleAudioPlayback() {
-  if (!audioPlayer.src) return;
-  
-  if (isPlaying) {
-    audioPlayer.pause();
-    playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
-    playPauseBtn.classList.remove('playing');
-    isPlaying = false;
+  if (document.body.classList.contains('light-mode')) {
+    icon.className = 'fas fa-moon';
+    localStorage.setItem('theme', 'light');
   } else {
-    audioPlayer.play();
-    playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
-    playPauseBtn.classList.add('playing');
-    isPlaying = true;
+    icon.className = 'fas fa-sun';
+    localStorage.setItem('theme', 'dark');
   }
 }
 
-function stopAudioPlayback() {
-  audioPlayer.pause();
-  audioPlayer.currentTime = 0;
-  playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
-  playPauseBtn.classList.remove('playing');
-  isPlaying = false;
-  updatePlaybackTime();
-}
+function setupTabNavigation(): void {
+  const tabButtons = document.querySelectorAll('.tab-button');
+  const noteContents = document.querySelectorAll('.note-content');
+  const activeIndicator = document.querySelector('.active-tab-indicator') as HTMLElement;
 
-function seekAudio() {
-  const seekTime = parseFloat(audioSeeker.value);
-  audioPlayer.currentTime = seekTime;
-}
-
-function updatePlaybackTime() {
-  const current = audioPlayer.currentTime;
-  const duration = audioPlayer.duration || 0;
-  
-  audioSeeker.value = current.toString();
-  
-  const formatTime = (time: number) => {
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  };
-  
-  playbackTime.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
-}
-
-async function refreshAllFromRaw() {
-  const rawText = rawTranscription.textContent?.trim();
-  
-  if (!rawText || rawTranscription.classList.contains('placeholder-active')) {
-    alert('Aucune transcription brute disponible pour la régénération');
-    return;
-  }
-  
-  try {
-    recordingStatus.textContent = 'Regenerating content...';
+  function updateActiveTab(activeButton: HTMLElement): void {
+    const activeTab = activeButton.dataset.tab!;
     
-    // Generate new title
-    const title = await generateTitle(rawText);
-    editorTitle.textContent = title;
+    tabButtons.forEach(btn => btn.classList.remove('active'));
+    noteContents.forEach(content => content.classList.remove('active'));
     
-    // Generate new summary
-    const summary = await generateSummary(rawText);
-    summaryEditor.textContent = summary;
-    summaryEditor.classList.remove('placeholder-active');
-    
-    // Generate new detailed note
-    const detailedNote = await generateDetailedNote(rawText);
-    polishedNote.textContent = detailedNote;
-    polishedNote.classList.remove('placeholder-active');
-    
-    // Update session if exists
-    if (currentSession) {
-      await DatabaseService.updateSession(currentSession.id, {
-        title: title,
-        summary: summary,
-        detailed_note: detailedNote
-      });
-      
-      await sessionsList.loadSessions();
+    activeButton.classList.add('active');
+    const activeContent = document.getElementById(getContentId(activeTab));
+    if (activeContent) {
+      activeContent.classList.add('active');
     }
+
+    // Update indicator position
+    const buttonRect = activeButton.getBoundingClientRect();
+    const containerRect = activeButton.parentElement!.getBoundingClientRect();
+    const left = buttonRect.left - containerRect.left;
+    const width = buttonRect.width;
     
-    recordingStatus.textContent = 'Content regenerated successfully';
-    setTimeout(() => {
-      recordingStatus.textContent = 'Ready to record';
-    }, 2000);
-    
-  } catch (error) {
-    console.error('Error regenerating content:', error);
-    alert('Erreur lors de la régénération du contenu');
-    recordingStatus.textContent = 'Ready to record';
+    activeIndicator.style.left = `${left}px`;
+    activeIndicator.style.width = `${width}px`;
   }
-}
 
-async function refreshNoteFromSummary() {
-  const summaryText = summaryEditor.textContent?.trim();
-  
-  if (!summaryText || summaryEditor.classList.contains('placeholder-active')) {
-    alert('Aucun résumé disponible pour générer la note détaillée');
-    return;
-  }
-  
-  try {
-    recordingStatus.textContent = 'Generating detailed note...';
-    
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
-    const prompt = `Développe ce résumé en une note détaillée et bien structurée :
-
-${summaryText}
-
-La note doit :
-- Être en français
-- Avoir une structure claire avec des titres et sous-titres
-- Développer chaque point du résumé avec plus de détails
-- Être bien formatée et professionnelle
-- Utiliser un formatage markdown simple (titres avec #, listes avec -, etc.)`;
-    
-    const result = await model.generateContent(prompt);
-    const detailedNote = result.response.text().trim();
-    
-    polishedNote.textContent = detailedNote;
-    polishedNote.classList.remove('placeholder-active');
-    
-    // Update session if exists
-    if (currentSession) {
-      await DatabaseService.updateSession(currentSession.id, {
-        detailed_note: detailedNote
-      });
+  function getContentId(tab: string): string {
+    switch (tab) {
+      case 'summary': return 'summaryEditor';
+      case 'note': return 'polishedNote';
+      case 'raw': return 'rawTranscription';
+      default: return 'summaryEditor';
     }
-    
-    recordingStatus.textContent = 'Detailed note generated successfully';
-    setTimeout(() => {
-      recordingStatus.textContent = 'Ready to record';
-    }, 2000);
-    
-  } catch (error) {
-    console.error('Error generating detailed note from summary:', error);
-    alert('Erreur lors de la génération de la note détaillée');
-    recordingStatus.textContent = 'Ready to record';
   }
-}
 
-async function handleSummaryEdit() {
-  if (summaryEditor.classList.contains('placeholder-active')) return;
-  
-  const summaryText = summaryEditor.textContent?.trim() || '';
-  
-  if (currentSession) {
-    await DatabaseService.updateSession(currentSession.id, {
-      summary: summaryText
+  tabButtons.forEach(button => {
+    button.addEventListener('click', () => {
+      updateActiveTab(button as HTMLElement);
     });
-  }
-}
-
-async function handleNoteEdit() {
-  if (polishedNote.classList.contains('placeholder-active')) return;
-  
-  const noteText = polishedNote.textContent?.trim() || '';
-  
-  if (currentSession) {
-    await DatabaseService.updateSession(currentSession.id, {
-      detailed_note: noteText
-    });
-  }
-}
-
-async function handleRawEdit() {
-  if (rawTranscription.classList.contains('placeholder-active')) return;
-  
-  const rawText = rawTranscription.textContent?.trim() || '';
-  
-  if (currentSession) {
-    await DatabaseService.updateSession(currentSession.id, {
-      raw_transcription: rawText
-    });
-  }
-}
-
-async function handleTitleEdit() {
-  const titleText = editorTitle.textContent?.trim() || 'Untitled Note';
-  
-  if (currentSession) {
-    await DatabaseService.updateSession(currentSession.id, {
-      title: titleText
-    });
-    
-    await sessionsList.loadSessions();
-  }
-}
-
-function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text).then(() => {
-    // Show temporary feedback
-    const originalStatus = recordingStatus.textContent;
-    recordingStatus.textContent = 'Copied to clipboard!';
-    setTimeout(() => {
-      recordingStatus.textContent = originalStatus;
-    }, 1500);
-  }).catch(err => {
-    console.error('Error copying to clipboard:', err);
-    alert('Erreur lors de la copie dans le presse-papiers');
   });
+
+  // Initialize first tab
+  const firstTab = tabButtons[0] as HTMLElement;
+  if (firstTab) {
+    updateActiveTab(firstTab);
+  }
 }
 
-function saveAsFile(content: string, filename: string) {
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+// Copy and save functions
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Copié dans le presse-papiers !');
+  } catch (error) {
+    console.error('Error copying to clipboard:', error);
+    showToast('Erreur lors de la copie');
+  }
+}
+
+function downloadAsFile(content: string, filename: string, mimeType: string = 'text/plain'): void {
+  const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -1577,80 +987,378 @@ function saveAsFile(content: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-async function saveAllAsZip() {
-  if (!currentSession) {
-    alert('Aucune session active à sauvegarder');
-    return;
-  }
-  
+async function saveAllAsZip(): Promise<void> {
   try {
     const zip = new JSZip();
     
-    // Add text files
-    const rawText = rawTranscription.classList.contains('placeholder-active') ? '' : rawTranscription.textContent || '';
-    const summaryText = summaryEditor.classList.contains('placeholder-active') ? '' : summaryEditor.textContent || '';
-    const noteText = polishedNote.classList.contains('placeholder-active') ? '' : polishedNote.textContent || '';
+    const titleElement = document.querySelector('.editor-title') as HTMLElement;
+    const title = titleElement?.textContent || 'Untitled Note';
     
-    if (rawText) zip.file('transcription-brute.txt', rawText);
-    if (summaryText) zip.file('resume.txt', summaryText);
-    if (noteText) zip.file('note-detaillee.txt', noteText);
+    const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+    const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+    const rawTranscription = document.getElementById('rawTranscription') as HTMLElement;
     
-    // Add audio file if available
-    if (currentSession.audio_file_path) {
-      try {
-        const audioUrl = await StorageService.getAudioFileUrl(currentSession.audio_file_path);
-        if (audioUrl) {
-          const response = await fetch(audioUrl);
-          const audioBlob = await response.blob();
-          zip.file('enregistrement.webm', audioBlob);
-        }
-      } catch (error) {
-        console.warn('Could not include audio file in zip:', error);
-      }
+    const summary = summaryEditor?.textContent || '';
+    const detailed = polishedNote?.textContent || '';
+    const raw = rawTranscription?.textContent || '';
+    
+    zip.file('resume.txt', summary);
+    zip.file('note_detaillee.md', detailed);
+    zip.file('transcription_brute.txt', raw);
+    
+    if (currentAudioBlob) {
+      zip.file('enregistrement.webm', currentAudioBlob);
     }
     
-    // Generate and download zip
-    const zipBlob = await zip.generateAsync({ type: 'blob' });
-    const url = URL.createObjectURL(zipBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${currentSession.title || 'session'}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const content = await zip.generateAsync({ type: 'blob' });
+    downloadAsFile(content as any, `${title}.zip`, 'application/zip');
     
+    showToast('Archive créée avec succès !');
   } catch (error) {
-    console.error('Error creating zip file:', error);
-    alert('Erreur lors de la création du fichier ZIP');
+    console.error('Error creating zip:', error);
+    showToast('Erreur lors de la création de l\'archive');
   }
 }
 
-async function handleLogout() {
-  try {
+function showToast(message: string): void {
+  const toast = document.createElement('div');
+  toast.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: var(--color-accent);
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    z-index: 10000;
+    animation: slideInRight 0.3s ease-out;
+  `;
+  toast.textContent = message;
+  
+  document.body.appendChild(toast);
+  
+  setTimeout(() => {
+    toast.style.animation = 'slideOutRight 0.3s ease-in forwards';
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.parentNode.removeChild(toast);
+      }
+    }, 300);
+  }, 3000);
+}
+
+// Initialize application
+async function initializeApp(): Promise<void> {
+  // Initialize components
+  authModal = new AuthModal();
+  sessionsList = new SessionsList((session) => {
+    loadSessionIntoUI(session);
+  });
+  pdfList = new PdfList();
+  transcriptionProgress = new TranscriptionProgress();
+
+  // Add sessions list to sidebar
+  const mainContent = document.querySelector('.main-content') as HTMLElement;
+  if (mainContent) {
+    document.body.insertBefore(sessionsList.getElement(), mainContent);
+    
+    // Add PDF list to sessions list
+    const sessionsContent = sessionsList.getElement().querySelector('.sessions-content') as HTMLElement;
+    if (sessionsContent) {
+      sessionsContent.appendChild(pdfList.getElement());
+    }
+  }
+
+  // Setup tab navigation
+  setupTabNavigation();
+  
+  // Setup audio playback
+  setupAudioPlayback();
+
+  // Check microphone status on load
+  await checkMicrophoneStatus();
+
+  // Setup event listeners
+  setupEventListeners();
+
+  // Setup auth state listener
+  AuthService.onAuthStateChange(async (user) => {
+    currentUser = user;
+    
+    if (user) {
+      authModal.hide();
+      await sessionsList.loadSessions();
+      await pdfList.loadDocuments();
+      
+      // Show app with entrance animation
+      const appContainer = document.getElementById('mainApp') as HTMLElement;
+      if (appContainer) {
+        appContainer.classList.add('app-entrance');
+      }
+    } else {
+      authModal.show();
+    }
+  });
+
+  // Load saved theme
+  const savedTheme = localStorage.getItem('theme');
+  if (savedTheme === 'light') {
+    document.body.classList.add('light-mode');
+    const themeButton = document.getElementById('themeToggleButton') as HTMLButtonElement;
+    const icon = themeButton?.querySelector('i') as HTMLElement;
+    if (icon) icon.className = 'fas fa-moon';
+  }
+
+  // Check initial auth state
+  const user = await AuthService.getCurrentUser();
+  if (!user) {
+    authModal.show();
+  }
+}
+
+function setupEventListeners(): void {
+  // Recording button
+  const recordButton = document.getElementById('recordButton') as HTMLButtonElement;
+  recordButton?.addEventListener('click', async () => {
+    if (!microphoneStatus.available) {
+      showMicrophoneHelp();
+      return;
+    }
+
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      stopRecording();
+    } else {
+      await startRecording();
+    }
+  });
+
+  // Duration controls
+  const durationInput = document.getElementById('durationInput') as HTMLInputElement;
+  const setDurationButton = document.getElementById('setDurationButton') as HTMLButtonElement;
+  
+  setDurationButton?.addEventListener('click', () => {
+    const duration = parseInt(durationInput.value);
+    if (duration >= 1 && duration <= 120) {
+      recordingDuration = duration;
+      maxRecordingTime = duration * 60 * 1000;
+      showToast(`Durée définie à ${duration} minute${duration > 1 ? 's' : ''}`);
+    }
+  });
+
+  // File uploads
+  const audioFileUpload = document.getElementById('audioFileUpload') as HTMLInputElement;
+  const uploadAudioButton = document.getElementById('uploadAudioButton') as HTMLButtonElement;
+  
+  uploadAudioButton?.addEventListener('click', () => {
+    audioFileUpload.click();
+  });
+  
+  audioFileUpload?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (file) {
+      handleAudioUpload(file);
+    }
+  });
+
+  const pdfFileUpload = document.getElementById('pdfFileUpload') as HTMLInputElement;
+  const uploadPdfButton = document.getElementById('uploadPdfButton') as HTMLButtonElement;
+  
+  uploadPdfButton?.addEventListener('click', () => {
+    pdfFileUpload.click();
+  });
+  
+  pdfFileUpload?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (file) {
+      handlePdfUpload(file);
+    }
+  });
+
+  // Action buttons
+  const themeToggleButton = document.getElementById('themeToggleButton') as HTMLButtonElement;
+  themeToggleButton?.addEventListener('click', toggleTheme);
+
+  const newButton = document.getElementById('newButton') as HTMLButtonElement;
+  newButton?.addEventListener('click', clearCurrentNote);
+
+  const logoutButton = document.getElementById('logoutButton') as HTMLButtonElement;
+  logoutButton?.addEventListener('click', async () => {
     await AuthService.signOut();
-    // Auth state change will handle UI updates
-  } catch (error) {
-    console.error('Error signing out:', error);
-    alert('Erreur lors de la déconnexion');
+    clearCurrentNote();
+  });
+
+  // Copy buttons
+  const copyRawButton = document.getElementById('copyRawTranscriptionButton') as HTMLButtonElement;
+  copyRawButton?.addEventListener('click', () => {
+    const rawContent = document.getElementById('rawTranscription') as HTMLElement;
+    if (rawContent) {
+      copyToClipboard(rawContent.textContent || '');
+    }
+  });
+
+  const copySummaryButton = document.getElementById('copySummaryButton') as HTMLButtonElement;
+  copySummaryButton?.addEventListener('click', () => {
+    const summaryContent = document.getElementById('summaryEditor') as HTMLElement;
+    if (summaryContent) {
+      copyToClipboard(summaryContent.textContent || '');
+    }
+  });
+
+  const copyDetailedButton = document.getElementById('copyDetailedNoteButton') as HTMLButtonElement;
+  copyDetailedButton?.addEventListener('click', () => {
+    const detailedContent = document.getElementById('polishedNote') as HTMLElement;
+    if (detailedContent) {
+      copyToClipboard(detailedContent.textContent || '');
+    }
+  });
+
+  // Save buttons
+  const saveSummaryButton = document.getElementById('saveSummaryButton') as HTMLButtonElement;
+  saveSummaryButton?.addEventListener('click', () => {
+    const summaryContent = document.getElementById('summaryEditor') as HTMLElement;
+    const titleElement = document.querySelector('.editor-title') as HTMLElement;
+    const title = titleElement?.textContent || 'Untitled Note';
+    
+    if (summaryContent) {
+      downloadAsFile(summaryContent.textContent || '', `${title}_resume.txt`);
+    }
+  });
+
+  const saveDetailedButton = document.getElementById('saveDetailedNoteButton') as HTMLButtonElement;
+  saveDetailedButton?.addEventListener('click', () => {
+    const detailedContent = document.getElementById('polishedNote') as HTMLElement;
+    const titleElement = document.querySelector('.editor-title') as HTMLElement;
+    const title = titleElement?.textContent || 'Untitled Note';
+    
+    if (detailedContent) {
+      downloadAsFile(detailedContent.textContent || '', `${title}_note_detaillee.md`, 'text/markdown');
+    }
+  });
+
+  const saveAllButton = document.getElementById('saveAllButton') as HTMLButtonElement;
+  saveAllButton?.addEventListener('click', saveAllAsZip);
+
+  // Refresh buttons
+  const refreshAllButton = document.getElementById('refreshAllButton') as HTMLButtonElement;
+  refreshAllButton?.addEventListener('click', async () => {
+    if (!currentSessionId) return;
+    
+    const rawContent = document.getElementById('rawTranscription') as HTMLElement;
+    const transcription = rawContent?.textContent || '';
+    
+    if (!transcription) {
+      showToast('Aucune transcription à traiter');
+      return;
+    }
+
+    transcriptionProgress.show();
+    
+    try {
+      transcriptionProgress.setStep(0, 'Génération du titre...');
+      const title = await generateTitle(transcription);
+      
+      transcriptionProgress.setStep(1, 'Création du résumé...');
+      const summary = await generateSummary(transcription);
+      
+      transcriptionProgress.setStep(2, 'Rédaction de la note détaillée...');
+      const detailedNote = await generateDetailedNote(transcription);
+
+      // Update UI
+      const titleElement = document.querySelector('.editor-title') as HTMLElement;
+      const summaryEditor = document.getElementById('summaryEditor') as HTMLElement;
+      const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+
+      if (titleElement) titleElement.textContent = title;
+      if (summaryEditor) summaryEditor.innerHTML = marked.parse(summary);
+      if (polishedNote) polishedNote.innerHTML = marked.parse(detailedNote);
+
+      // Update database
+      await DatabaseService.updateSession(currentSessionId, {
+        title,
+        summary,
+        detailed_note: detailedNote
+      });
+
+      await sessionsList.loadSessions();
+      transcriptionProgress.setSuccess('Contenu régénéré avec succès !');
+      
+    } catch (error) {
+      console.error('Error refreshing content:', error);
+      transcriptionProgress.setError('Erreur lors de la régénération');
+    }
+  });
+
+  const refreshNoteButton = document.getElementById('refreshNoteFromSummaryButton') as HTMLButtonElement;
+  refreshNoteButton?.addEventListener('click', async () => {
+    if (!currentSessionId) return;
+    
+    const summaryContent = document.getElementById('summaryEditor') as HTMLElement;
+    const summary = summaryContent?.textContent || '';
+    
+    if (!summary) {
+      showToast('Aucun résumé à traiter');
+      return;
+    }
+
+    transcriptionProgress.show();
+    
+    try {
+      transcriptionProgress.setStep(0, 'Rédaction de la note détaillée à partir du résumé...');
+      const detailedNote = await generateDetailedNote(summary);
+
+      const polishedNote = document.getElementById('polishedNote') as HTMLElement;
+      if (polishedNote) {
+        polishedNote.innerHTML = marked.parse(detailedNote);
+      }
+
+      await DatabaseService.updateSession(currentSessionId, {
+        detailed_note: detailedNote
+      });
+
+      transcriptionProgress.setSuccess('Note détaillée mise à jour !');
+      
+    } catch (error) {
+      console.error('Error refreshing note:', error);
+      transcriptionProgress.setError('Erreur lors de la mise à jour');
+    }
+  });
+
+  // Search functionality
+  const searchInput = sessionsList.getElement().querySelector('#sessionSearchInput') as HTMLInputElement;
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      const searchTerm = (e.target as HTMLInputElement).value;
+      pdfList.filterDocuments(searchTerm);
+    });
   }
 }
 
-// Initialize the app when DOM is loaded
+// Add CSS animations
+const style = document.createElement('style');
+style.textContent = `
+  @keyframes slideInRight {
+    from {
+      transform: translateX(100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+  
+  @keyframes slideOutRight {
+    from {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    to {
+      transform: translateX(100%);
+      opacity: 0;
+    }
+  }
+`;
+document.head.appendChild(style);
+
+// Initialize app when DOM is loaded
 document.addEventListener('DOMContentLoaded', initializeApp);
-
-// Handle page visibility changes
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden && isRecording) {
-    // Optionally pause recording when page is hidden
-    console.log('Page hidden while recording');
-  }
-});
-
-// Handle beforeunload to warn about unsaved changes
-window.addEventListener('beforeunload', (e) => {
-  if (isRecording) {
-    e.preventDefault();
-    e.returnValue = 'Un enregistrement est en cours. Êtes-vous sûr de vouloir quitter ?';
-  }
-});
