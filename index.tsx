@@ -39,6 +39,7 @@ let isDarkMode = true;
 
 // Microphone permission state
 let microphonePermission: PermissionState | null = null;
+let microphoneAvailable = false;
 
 // DOM elements
 const recordButton = document.getElementById('recordButton') as HTMLButtonElement;
@@ -213,8 +214,8 @@ async function initializeApp() {
     // Set up authentication
     await setupAuth();
     
-    // Check microphone permissions
-    await checkMicrophonePermissions();
+    // Check microphone availability and permissions
+    await checkMicrophoneAvailability();
     
     // Set up event listeners
     setupEventListeners();
@@ -275,36 +276,72 @@ async function initializeApp() {
   }
 }
 
-async function checkMicrophonePermissions() {
+async function checkMicrophoneAvailability() {
   try {
-    // Check if Permissions API is supported
+    // First check if getUserMedia is supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      microphoneAvailable = false;
+      updateRecordButtonState();
+      return;
+    }
+
+    // Check if microphones are available
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(device => device.kind === 'audioinput');
+    microphoneAvailable = audioInputs.length > 0;
+
+    // Check permissions if Permissions API is supported
     if ('permissions' in navigator) {
-      const permission = await navigator.permissions.query({ name: 'microphone' as PermissionName });
-      microphonePermission = permission.state;
-      
-      // Listen for permission changes
-      permission.addEventListener('change', () => {
+      try {
+        const permission = await navigator.permissions.query({ name: 'microphone' as PermissionName });
         microphonePermission = permission.state;
-        updateRecordButtonState();
-      });
+        
+        // Listen for permission changes
+        permission.addEventListener('change', () => {
+          microphonePermission = permission.state;
+          updateRecordButtonState();
+        });
+      } catch (permError) {
+        console.warn('Permissions API not fully supported:', permError);
+        // Fallback: try to detect permission by attempting access
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach(track => track.stop());
+          microphonePermission = 'granted';
+        } catch (accessError) {
+          if (accessError.name === 'NotAllowedError') {
+            microphonePermission = 'denied';
+          } else {
+            microphonePermission = 'prompt';
+          }
+        }
+      }
     }
     
     updateRecordButtonState();
   } catch (error) {
-    console.warn('Could not check microphone permissions:', error);
-    // Permissions API might not be supported, continue normally
+    console.warn('Could not check microphone availability:', error);
+    microphoneAvailable = false;
+    updateRecordButtonState();
   }
 }
 
 function updateRecordButtonState() {
-  if (microphonePermission === 'denied') {
+  if (!microphoneAvailable) {
+    recordButton.title = 'Aucun microphone détecté';
+    recordButton.style.opacity = '0.5';
+    recordingStatus.textContent = 'No microphone detected';
+  } else if (microphonePermission === 'denied') {
     recordButton.title = 'Permissions du microphone refusées. Cliquez pour voir les instructions.';
+    recordButton.style.opacity = '0.7';
     recordingStatus.textContent = 'Microphone access denied';
   } else if (microphonePermission === 'prompt') {
     recordButton.title = 'Cliquez pour demander l\'accès au microphone';
+    recordButton.style.opacity = '1';
     recordingStatus.textContent = 'Click to request microphone access';
   } else {
     recordButton.title = 'Start/Stop Recording';
+    recordButton.style.opacity = '1';
     recordingStatus.textContent = 'Ready to record';
   }
 }
@@ -312,27 +349,59 @@ function updateRecordButtonState() {
 function showMicrophonePermissionDialog() {
   const modal = document.createElement('div');
   modal.className = 'delete-confirmation-modal visible';
-  modal.innerHTML = `
-    <div class="delete-confirmation-content">
-      <div class="delete-confirmation-icon">
-        <i class="fas fa-microphone-slash"></i>
+  
+  let content = '';
+  
+  if (!microphoneAvailable) {
+    content = `
+      <div class="delete-confirmation-content">
+        <div class="delete-confirmation-icon">
+          <i class="fas fa-microphone-slash"></i>
+        </div>
+        <h3 class="delete-confirmation-title">Aucun microphone détecté</h3>
+        <p class="delete-confirmation-message">
+          Aucun microphone n'a été détecté sur votre appareil.
+          <br><br>
+          <strong>Solutions possibles :</strong><br>
+          • Connectez un microphone ou un casque avec micro<br>
+          • Vérifiez que votre microphone est bien branché<br>
+          • Redémarrez votre navigateur après avoir connecté le microphone<br>
+          • Vérifiez les paramètres audio de votre système
+        </p>
+        <div class="delete-confirmation-actions">
+          <button class="delete-confirmation-btn cancel" id="permissionOkBtn">Compris</button>
+          <button class="delete-confirmation-btn confirm" id="permissionRetryBtn">Vérifier à nouveau</button>
+        </div>
       </div>
-      <h3 class="delete-confirmation-title">Accès au microphone requis</h3>
-      <p class="delete-confirmation-message">
-        Pour utiliser la fonction d'enregistrement, vous devez autoriser l'accès au microphone.
-        <br><br>
-        <strong>Comment activer le microphone :</strong><br>
-        1. Cliquez sur l'icône de cadenas ou d'information dans la barre d'adresse<br>
-        2. Autorisez l'accès au microphone<br>
-        3. Rechargez la page si nécessaire
-      </p>
-      <div class="delete-confirmation-actions">
-        <button class="delete-confirmation-btn cancel" id="permissionOkBtn">Compris</button>
-        <button class="delete-confirmation-btn confirm" id="permissionRetryBtn">Réessayer</button>
+    `;
+  } else {
+    content = `
+      <div class="delete-confirmation-content">
+        <div class="delete-confirmation-icon">
+          <i class="fas fa-microphone-slash"></i>
+        </div>
+        <h3 class="delete-confirmation-title">Accès au microphone requis</h3>
+        <p class="delete-confirmation-message">
+          Pour utiliser la fonction d'enregistrement, vous devez autoriser l'accès au microphone.
+          <br><br>
+          <strong>Comment activer le microphone :</strong><br>
+          1. Cliquez sur l'icône de cadenas ou d'information dans la barre d'adresse<br>
+          2. Autorisez l'accès au microphone<br>
+          3. Rechargez la page si nécessaire<br><br>
+          <strong>Ou :</strong><br>
+          • Allez dans les paramètres de votre navigateur<br>
+          • Cherchez "Confidentialité et sécurité" > "Paramètres du site"<br>
+          • Autorisez le microphone pour ce site
+        </p>
+        <div class="delete-confirmation-actions">
+          <button class="delete-confirmation-btn cancel" id="permissionOkBtn">Compris</button>
+          <button class="delete-confirmation-btn confirm" id="permissionRetryBtn">Réessayer</button>
+        </div>
       </div>
-    </div>
-  `;
-
+    `;
+  }
+  
+  modal.innerHTML = content;
   document.body.appendChild(modal);
 
   const okBtn = modal.querySelector('#permissionOkBtn') as HTMLButtonElement;
@@ -344,7 +413,11 @@ function showMicrophonePermissionDialog() {
 
   retryBtn.addEventListener('click', async () => {
     document.body.removeChild(modal);
-    await requestMicrophonePermission();
+    if (!microphoneAvailable) {
+      await checkMicrophoneAvailability();
+    } else {
+      await requestMicrophonePermission();
+    }
   });
 
   // Close on overlay click
@@ -357,8 +430,20 @@ function showMicrophonePermissionDialog() {
 
 async function requestMicrophonePermission(): Promise<boolean> {
   try {
+    // Check if microphone is available first
+    if (!microphoneAvailable) {
+      showMicrophonePermissionDialog();
+      return false;
+    }
+
     // Try to get user media to trigger permission request
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      } 
+    });
     
     // If successful, stop the stream immediately
     stream.getTracks().forEach(track => track.stop());
@@ -369,11 +454,20 @@ async function requestMicrophonePermission(): Promise<boolean> {
     
     return true;
   } catch (error) {
-    console.error('Microphone permission denied:', error);
-    microphonePermission = 'denied';
-    updateRecordButtonState();
+    console.error('Microphone permission error:', error);
     
-    // Show helpful dialog
+    // Handle specific error types
+    if (error.name === 'NotAllowedError') {
+      microphonePermission = 'denied';
+    } else if (error.name === 'NotFoundError') {
+      microphoneAvailable = false;
+    } else if (error.name === 'NotReadableError') {
+      // Microphone is being used by another application
+      alert('Le microphone est déjà utilisé par une autre application. Veuillez fermer les autres applications utilisant le microphone et réessayer.');
+      return false;
+    }
+    
+    updateRecordButtonState();
     showMicrophonePermissionDialog();
     
     return false;
@@ -639,7 +733,13 @@ async function toggleRecording() {
 
 async function startRecording() {
   try {
-    // Check microphone permission first
+    // Check microphone availability first
+    if (!microphoneAvailable) {
+      showMicrophonePermissionDialog();
+      return;
+    }
+
+    // Check microphone permission
     if (microphonePermission === 'denied') {
       showMicrophonePermissionDialog();
       return;
@@ -716,9 +816,13 @@ async function startRecording() {
       updateRecordButtonState();
       showMicrophonePermissionDialog();
     } else if (error.name === 'NotFoundError') {
-      alert('Aucun microphone détecté. Veuillez connecter un microphone et réessayer.');
+      microphoneAvailable = false;
+      updateRecordButtonState();
+      showMicrophonePermissionDialog();
     } else if (error.name === 'NotReadableError') {
       alert('Le microphone est déjà utilisé par une autre application. Veuillez fermer les autres applications utilisant le microphone et réessayer.');
+    } else if (error.name === 'OverconstrainedError') {
+      alert('Les paramètres audio demandés ne sont pas supportés par votre microphone. Veuillez essayer avec un autre microphone.');
     } else {
       alert('Erreur lors du démarrage de l\'enregistrement. Vérifiez que votre microphone fonctionne correctement.');
     }
