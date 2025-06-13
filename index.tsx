@@ -1058,9 +1058,9 @@ async function initializeApp(): Promise<void> {
   transcriptionProgress = new TranscriptionProgress();
 
   // Add sessions list to sidebar
-  const mainContent = document.querySelector('.main-content') as HTMLElement;
-  if (mainContent) {
-    document.body.insertBefore(sessionsList.getElement(), mainContent);
+  const appContainer = document.getElementById('mainApp') as HTMLElement;
+  if (appContainer) {
+    document.body.insertBefore(sessionsList.getElement(), appContainer);
     
     // Add PDF list to sessions list
     const sessionsContent = sessionsList.getElement().querySelector('.sessions-content') as HTMLElement;
