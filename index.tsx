@@ -566,11 +566,7 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
       throw new Error('Fichier audio vide ou invalide');
     }
 
-    // Check file size (Gemini has limits)
-    const maxSize = 20 * 1024 * 1024; // 20MB limit
-    if (audioBlob.size > maxSize) {
-      throw new Error('Fichier audio trop volumineux (maximum 20MB)');
-    }
+    console.log(`Traitement d'un fichier audio de ${(audioBlob.size / 1024 / 1024).toFixed(2)} MB`);
 
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     
@@ -582,16 +578,35 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
       throw new Error('Erreur lors de la lecture du fichier audio');
     }
 
-    // Convert to base64 with chunking to avoid stack overflow
-    const chunkSize = 1024 * 1024; // 1MB chunks
+    // Convert to base64 with optimized chunking for large files
     const uint8Array = new Uint8Array(arrayBuffer);
     let base64Audio = '';
     
+    // Use larger chunks for better performance with big files
+    const chunkSize = 8 * 1024 * 1024; // 8MB chunks for better performance
+    
+    console.log(`Conversion en base64 par chunks de ${chunkSize / 1024 / 1024}MB...`);
+    
     for (let i = 0; i < uint8Array.length; i += chunkSize) {
       const chunk = uint8Array.slice(i, i + chunkSize);
-      const chunkString = String.fromCharCode.apply(null, Array.from(chunk));
+      
+      // Use a more efficient method for large chunks
+      let chunkString = '';
+      for (let j = 0; j < chunk.length; j += 65536) { // Process in 64KB sub-chunks
+        const subChunk = chunk.slice(j, j + 65536);
+        chunkString += String.fromCharCode.apply(null, Array.from(subChunk));
+      }
+      
       base64Audio += btoa(chunkString);
+      
+      // Log progress for large files
+      if (uint8Array.length > 10 * 1024 * 1024) { // Log for files > 10MB
+        const progress = Math.round((i / uint8Array.length) * 100);
+        console.log(`Progression conversion: ${progress}%`);
+      }
     }
+
+    console.log('Conversion base64 terminée, envoi à Gemini...');
 
     // Prepare the content for Gemini
     const content = [
@@ -604,9 +619,12 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
       "Transcris fidèlement cet enregistrement audio en français. Retourne uniquement le texte transcrit, sans commentaires ni formatage."
     ];
 
-    // Generate content with timeout
+    // Generate content with extended timeout for large files
+    const timeoutDuration = Math.max(120000, audioBlob.size / 1024 / 1024 * 10000); // Minimum 2 minutes, +10s per MB
+    console.log(`Timeout défini à ${timeoutDuration / 1000} secondes pour ce fichier`);
+    
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Timeout de transcription (60s)')), 60000);
+      setTimeout(() => reject(new Error(`Timeout de transcription (${timeoutDuration / 1000}s)`)), timeoutDuration);
     });
 
     const transcriptionPromise = model.generateContent(content);
@@ -619,6 +637,7 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
       throw new Error('Aucun texte transcrit reçu');
     }
 
+    console.log(`Transcription réussie: ${text.length} caractères`);
     return text;
   } catch (error) {
     console.error('Transcription error:', error);
@@ -630,7 +649,9 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
       } else if (error.message.includes('network') || error.message.includes('fetch')) {
         throw new Error('Erreur de connexion. Vérifiez votre connexion internet.');
       } else if (error.message.includes('timeout')) {
-        throw new Error('Timeout de transcription. Le fichier est peut-être trop long.');
+        throw new Error('Timeout de transcription. Le fichier est très volumineux, cela peut prendre plus de temps.');
+      } else if (error.message.includes('too large') || error.message.includes('size')) {
+        throw new Error('Fichier trop volumineux pour l\'API Gemini. Essayez de diviser votre enregistrement.');
       } else {
         throw new Error(`Erreur de transcription: ${error.message}`);
       }
@@ -837,10 +858,12 @@ function formatTime(seconds: number): string {
 async function handleAudioUpload(file: File): Promise<void> {
   if (!currentUser) return;
 
+  console.log(`Upload d'un fichier audio: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+
   transcriptionProgress.show();
 
   try {
-    transcriptionProgress.setStep(0, 'Traitement du fichier audio...');
+    transcriptionProgress.setStep(0, `Traitement du fichier audio (${(file.size / 1024 / 1024).toFixed(2)} MB)...`);
 
     // Create session
     const sessionData: Partial<DictationSession> = {
@@ -869,7 +892,7 @@ async function handleAudioUpload(file: File): Promise<void> {
     await DatabaseService.updateSession(session.id, { audio_file_path: audioPath });
 
     // Process audio
-    transcriptionProgress.setStep(2, 'Transcription par IA...');
+    transcriptionProgress.setStep(2, 'Transcription par IA (cela peut prendre du temps pour les gros fichiers)...');
     const transcription = await transcribeAudio(file);
     
     transcriptionProgress.setStep(3, 'Génération du titre...');
