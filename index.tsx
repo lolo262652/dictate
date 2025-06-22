@@ -33,8 +33,19 @@ let sessionsList: SessionsList;
 let pdfList: PdfList;
 let transcriptionProgress: TranscriptionProgress;
 
-// Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || '');
+// Initialize Gemini AI with validation
+function initializeGeminiAI() {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  
+  if (!apiKey || apiKey.trim() === '' || apiKey === 'AIzaSyBL4Fm-50TtqiS3DiQqpsqP6ThXQHQw4U4') {
+    console.warn('Gemini API key is missing or using example key. Please set VITE_GEMINI_API_KEY in your .env file.');
+    return null;
+  }
+  
+  return new GoogleGenerativeAI(apiKey);
+}
+
+const genAI = initializeGeminiAI();
 
 // Microphone status tracking
 let microphoneStatus = {
@@ -561,6 +572,11 @@ async function processRecording(audioBlob: Blob): Promise<void> {
 
 async function transcribeAudio(audioBlob: Blob): Promise<string> {
   try {
+    // Check if Gemini AI is properly initialized
+    if (!genAI) {
+      throw new Error('Configuration API manquante. Veuillez configurer votre clé API Gemini dans le fichier .env');
+    }
+
     // Validate audio blob
     if (!audioBlob || audioBlob.size === 0) {
       throw new Error('Fichier audio vide ou invalide');
@@ -644,7 +660,13 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
     
     // Provide more specific error messages
     if (error instanceof Error) {
-      if (error.message.includes('quota')) {
+      // Check for API key authentication errors
+      if (error.message.includes('403') || 
+          error.message.includes('unregistered callers') || 
+          error.message.includes('API Key') ||
+          error.message.includes('established identity')) {
+        throw new Error('Clé API Gemini invalide ou manquante. Veuillez vérifier votre fichier .env et vous assurer que VITE_GEMINI_API_KEY contient une clé API valide. Vous pouvez obtenir une clé sur https://makersuite.google.com/app/apikey');
+      } else if (error.message.includes('quota')) {
         throw new Error('Quota API dépassé. Veuillez réessayer plus tard.');
       } else if (error.message.includes('network') || error.message.includes('fetch')) {
         throw new Error('Erreur de connexion. Vérifiez votre connexion internet.');
@@ -652,6 +674,8 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
         throw new Error('Timeout de transcription. Le fichier est très volumineux, cela peut prendre plus de temps.');
       } else if (error.message.includes('too large') || error.message.includes('size')) {
         throw new Error('Fichier trop volumineux pour l\'API Gemini. Essayez de diviser votre enregistrement.');
+      } else if (error.message.includes('Configuration API manquante')) {
+        throw error; // Re-throw the configuration error as-is
       } else {
         throw new Error(`Erreur de transcription: ${error.message}`);
       }
@@ -663,6 +687,10 @@ async function transcribeAudio(audioBlob: Blob): Promise<string> {
 
 async function generateTitle(transcription: string): Promise<string> {
   try {
+    if (!genAI) {
+      return 'Enregistrement sans titre';
+    }
+
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     
     const prompt = `Génère un titre court et descriptif (maximum 60 caractères) pour cette transcription :
@@ -682,6 +710,10 @@ Retourne uniquement le titre, sans guillemets ni formatage.`;
 
 async function generateSummary(transcription: string): Promise<string> {
   try {
+    if (!genAI) {
+      return '';
+    }
+
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     
     const prompt = `Crée un résumé concis et structuré de cette transcription :
@@ -707,6 +739,10 @@ Retourne uniquement le résumé.`;
 
 async function generateDetailedNote(transcription: string): Promise<string> {
   try {
+    if (!genAI) {
+      return '';
+    }
+
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     
     const prompt = `Transforme cette transcription en une note détaillée et bien structurée :
