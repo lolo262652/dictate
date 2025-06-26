@@ -48,6 +48,7 @@ export class AuthModal {
             </p>
           </div>
           <div id="authError" class="auth-error" style="display: none;"></div>
+          <div id="authSuccess" class="auth-success" style="display: none;"></div>
         </div>
       </div>
     `;
@@ -68,6 +69,17 @@ export class AuthModal {
     const email = (document.getElementById('emailInput') as HTMLInputElement).value;
     const password = (document.getElementById('passwordInput') as HTMLInputElement).value;
     const errorDiv = document.getElementById('authError') as HTMLElement;
+    const successDiv = document.getElementById('authSuccess') as HTMLElement;
+    const submitBtn = document.getElementById('authSubmit') as HTMLButtonElement;
+
+    // Clear previous messages
+    errorDiv.style.display = 'none';
+    successDiv.style.display = 'none';
+
+    // Show loading state
+    submitBtn.disabled = true;
+    const originalContent = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>Chargement...</span>';
 
     try {
       const { AuthService } = await import('../lib/auth');
@@ -80,14 +92,48 @@ export class AuthModal {
       }
 
       if (result.error) {
-        errorDiv.textContent = result.error.message;
+        let errorMessage = result.error.message;
+        
+        // Provide more user-friendly error messages
+        if (result.error.message.includes('Invalid login credentials')) {
+          if (this.isSignUp) {
+            errorMessage = 'Erreur lors de la création du compte. Vérifiez vos informations.';
+          } else {
+            errorMessage = 'Email ou mot de passe incorrect. Avez-vous créé un compte ?';
+          }
+        } else if (result.error.message.includes('User already registered')) {
+          errorMessage = 'Un compte existe déjà avec cet email. Essayez de vous connecter.';
+        } else if (result.error.message.includes('Password should be at least')) {
+          errorMessage = 'Le mot de passe doit contenir au moins 6 caractères.';
+        } else if (result.error.message.includes('Invalid email')) {
+          errorMessage = 'Format d\'email invalide.';
+        }
+
+        errorDiv.textContent = errorMessage;
         errorDiv.style.display = 'block';
       } else {
-        this.hide();
+        if (this.isSignUp) {
+          successDiv.textContent = 'Compte créé avec succès ! Vous pouvez maintenant vous connecter.';
+          successDiv.style.display = 'block';
+          
+          // Switch to sign in mode after successful sign up
+          setTimeout(() => {
+            this.isSignUp = false;
+            this.toggleMode();
+            successDiv.style.display = 'none';
+          }, 2000);
+        } else {
+          this.hide();
+        }
       }
     } catch (error) {
-      errorDiv.textContent = 'Une erreur est survenue';
+      console.error('Auth error:', error);
+      errorDiv.textContent = 'Une erreur de connexion est survenue. Vérifiez votre connexion internet.';
       errorDiv.style.display = 'block';
+    } finally {
+      // Restore button state
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = originalContent;
     }
   }
 
@@ -117,9 +163,11 @@ export class AuthModal {
       submitBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i><span>Se connecter</span>';
     }
 
-    // Clear error
+    // Clear messages
     const errorDiv = document.getElementById('authError') as HTMLElement;
+    const successDiv = document.getElementById('authSuccess') as HTMLElement;
     errorDiv.style.display = 'none';
+    successDiv.style.display = 'none';
   }
 
   show() {
